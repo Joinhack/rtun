@@ -1,0 +1,31 @@
+[workspace]
+member = ["crates/fake_dns"]
+
+[package]
+name = "rtun"
+authors = { workspace = true }
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+
+
+[workspace.package]
+authors = ["Join.G"]
+homepage = "https://github.com/Joinhack/rtun"
+version = "0.1.0"
+edition = "2024"
+
+
+[workspace.dependencies]
+log = "0.4.27"
+futures-core = "0.3.31"
+hickory-resolver = "0.25.2"
+tokio = { version = "1.45.1", features = [
+    "net",
+    "time",
+    "macros",
+    "rt-multi-thread",
+] }
+
+[dependencies]
+log = { workspace = true }

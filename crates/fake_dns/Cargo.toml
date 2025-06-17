@@ -1,0 +1,11 @@
+[package]
+name = "fake_dns"
+authors = { workspace = true }
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+
+[dependencies]
+log = { workspace = true }
+tokio = { workspace = true }
+hickory-resolver = { workspace = true }
