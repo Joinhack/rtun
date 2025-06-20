@@ -94,6 +94,7 @@ impl TcpServer {
                     let resp_len = resp_vec.len();
                     resp_vec.resize(resp_len + 2, 0);
                     resp_vec.copy_within(0..resp_len, 2);
+                    BigEndian::write_u16(&mut resp_vec[..2], resp_len as _);
                     if let Err(e) = tcp_stream.write_all(&resp_vec).await {
                         error!("dns tcp stream write error: {e}");
                         return;

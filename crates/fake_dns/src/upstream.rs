@@ -31,7 +31,7 @@ struct TcpRemoteClient {
 
 impl UdpRemoteClient {
     /// query the message
-    pub async fn query(&mut self, msg: Message) -> Result<Message, ProtoError> {
+    async fn query(&mut self, msg: Message) -> Result<Message, ProtoError> {
         let buf = msg.to_vec()?;
         self.udp_sock.send_to(&buf, self.remote).await?;
         let mut resp_buf = [0u8; 512];
@@ -44,7 +44,7 @@ impl UdpRemoteClient {
 
 impl TcpRemoteClient {
     /// query the message, the message parameter must be prepared.
-    pub async fn query(&mut self, msg: Message) -> Result<Message, ProtoError> {
+    async fn query(&mut self, msg: Message) -> Result<Message, ProtoError> {
         let mut msg_bytes = msg.to_vec()?;
         let msg_len = msg_bytes.len();
         msg_bytes.resize(msg_len + 2, 0);
@@ -55,12 +55,13 @@ impl TcpRemoteClient {
         let mut len_buf = [0u8; 2];
         self.tcp_stream.read_exact(&mut len_buf).await?;
         let msg_len = BigEndian::read_u16(&len_buf) as usize;
+
         let mut msg_bytes = BytesMut::with_capacity(msg_len);
         // fastest
         unsafe {
             msg_bytes.advance_mut(msg_len);
         }
-        self.tcp_stream.read_exact(&mut msg_bytes).await?;
+        self.tcp_stream.read_exact(&mut msg_bytes[..]).await?;
         let resp_message = Message::from_vec(&msg_bytes)?;
         Ok(resp_message)
     }
