@@ -24,8 +24,21 @@ tokio = { version = "1.45.1", features = [
     "net",
     "time",
     "macros",
+    "sync",
     "rt-multi-thread",
 ] }
+ipnet = "2.11.0"
+iprange = "0.6.7"
+fake_dns = { path = "crates/fake_dns" }
+byteorder = "1.5.0"
+bytes = "1.10.1"
+libc = "0.2.174"
+futures = "0.3.31"
 
 [dependencies]
+fake_dns = { workspace = true }
+tokio = { workspace = true }
 log = { workspace = true }
+libc = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }

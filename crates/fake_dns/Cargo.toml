@@ -9,3 +9,9 @@ homepage = { workspace = true }
 log = { workspace = true }
 tokio = { workspace = true }
 hickory-resolver = { workspace = true }
+iprange = { workspace = true }
+ipnet = { workspace = true }
+byteorder = { workspace = true }
+bytes = { workspace = true }
+libc = { workspace = true }
+futures = { workspace = true }
