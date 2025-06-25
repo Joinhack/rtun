@@ -1,0 +1,19 @@
+[package]
+name = "librtun"
+authors = { workspace = true }
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+
+[dependencies]
+smoltcp = { workspace = true, features = ["socket-tcp-cubic"] }
+bytes = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+spin = { workspace = true }
+oneshot = { workspace = true }
+rand = { workspace = true }
+byte_string = { workspace = true }
+ipnet = { workspace = true }
+libc = { workspace = true }
+tun = { workspace = true, features = ["async"] }

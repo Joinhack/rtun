@@ -32,13 +32,19 @@ struct TcpRemoteClient {
 impl UdpRemoteClient {
     /// query the message
     async fn query(&mut self, msg: Message) -> Result<Message, ProtoError> {
+        let req_id = msg.id();
         let buf = msg.to_vec()?;
         self.udp_sock.send_to(&buf, self.remote).await?;
         let mut resp_buf = [0u8; 512];
-        let readn = self.udp_sock.recv(&mut resp_buf).await?;
 
-        let resp_msg = Message::from_vec(&resp_buf[..readn])?;
-        Ok(resp_msg)
+        loop {
+            let readn = self.udp_sock.recv(&mut resp_buf).await?;
+            let resp_msg = Message::from_vec(&resp_buf[..readn])?;
+            if resp_msg.id() != req_id {
+                continue;
+            }
+            return Ok(resp_msg);
+        }
     }
 }
 

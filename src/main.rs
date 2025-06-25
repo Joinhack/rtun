@@ -1,13 +1,12 @@
-use std::net::IpAddr;
+use librtun::TunBuilder;
 
-use fake_dns::{DnsServer, DnsServerBuilder};
 #[tokio::main]
 async fn main() {
-    let dns_reomte_addr: IpAddr = "8.8.8.8".parse().unwrap();
-    let server: DnsServer = DnsServerBuilder::new(("127.0.0.1".parse().unwrap(), 1553))
-        .udp_remote(Some((dns_reomte_addr, 53)))
+    let tun = TunBuilder::new()
+        .address("192.16.0.1")
+        .destination("192.16.0.1")
+        .netmask("255.255.255.0")
         .build()
-        .await
         .unwrap();
-    let _rs = server.run().await;
+    let _ = tun.run().await;
 }

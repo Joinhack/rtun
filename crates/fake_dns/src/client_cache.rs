@@ -89,7 +89,7 @@ impl DnsClientCache {
         let mut guard = self.clients.lock().await;
         if let Some(q) = guard.get_mut(remote) {
             while let Some(client) = q.pop_front() {
-                // get the availd connect
+                // get the valid connect
                 if client.check_connect().await {
                     return Ok(client);
                 }

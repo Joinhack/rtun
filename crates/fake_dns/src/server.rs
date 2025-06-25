@@ -137,13 +137,15 @@ impl UdpServer {
                     continue;
                 }
             };
-            let message = match Message::from_vec(&buf[..n]) {
+            let mut message = match Message::from_vec(&buf[..n]) {
                 Ok(m) => m,
                 Err(e) => {
                     error!("udp decode dns failed with error: {}", e);
                     continue;
                 }
             };
+            message.set_recursion_available(false);
+            message.set_recursion_desired(false);
             let dnskey = DnsKey::UdpRemote(self.remote_addr.clone());
             let opts = self.connect_opts.clone();
             let cache = self.dns_client_cache.clone();
