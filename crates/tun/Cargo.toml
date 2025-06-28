@@ -16,4 +16,5 @@ rand = { workspace = true }
 byte_string = { workspace = true }
 ipnet = { workspace = true }
 libc = { workspace = true }
+etherparse = { workspace = true }
 tun = { workspace = true, features = ["async"] }

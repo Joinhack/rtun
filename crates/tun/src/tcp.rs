@@ -78,7 +78,7 @@ impl TcpTunManager {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum SocketState {
+enum ConnectState {
     Normal,
     Close,
     Closing,
@@ -90,8 +90,8 @@ pub struct TcpIConnectInner {
     send_buf: RingBuffer<'static, u8>,
     send_waker: Option<Waker>,
     recv_waker: Option<Waker>,
-    recv_state: SocketState,
-    send_state: SocketState,
+    recv_state: ConnectState,
+    send_state: ConnectState,
 }
 
 type SharedTcpConnect = Arc<SpinMutex<TcpIConnectInner>>;
@@ -111,11 +111,11 @@ pub struct TcpConnect {
 impl Drop for TcpConnect {
     fn drop(&mut self) {
         let mut inner = self.inner.lock();
-        if matches!(inner.recv_state, SocketState::Normal) {
-            inner.recv_state = SocketState::Close;
+        if matches!(inner.recv_state, ConnectState::Normal) {
+            inner.recv_state = ConnectState::Close;
         }
-        if matches!(inner.send_state, SocketState::Normal) {
-            inner.send_state = SocketState::Close;
+        if matches!(inner.send_state, ConnectState::Normal) {
+            inner.send_state = ConnectState::Close;
         }
         drop(inner);
         self.tun_manager.notify();
@@ -130,7 +130,7 @@ impl AsyncRead for TcpConnect {
     ) -> Poll<io::Result<()>> {
         let mut connect_inner = self.inner.lock();
         if connect_inner.recv_buf.is_empty() {
-            if let SocketState::Closed = connect_inner.recv_state {
+            if let ConnectState::Closed = connect_inner.recv_state {
                 return Poll::Ready(Ok(()));
             }
             if let Some(waker) = connect_inner.recv_waker.replace(cx.waker().clone()) {
@@ -159,7 +159,7 @@ impl AsyncWrite for TcpConnect {
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
         let mut connect_inner = self.inner.lock();
-        if !matches!(connect_inner.send_state, SocketState::Normal) {
+        if !matches!(connect_inner.send_state, ConnectState::Normal) {
             return Err(io::ErrorKind::BrokenPipe.into()).into();
         }
 
@@ -185,11 +185,11 @@ impl AsyncWrite for TcpConnect {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         let mut connect_inner = self.inner.lock();
-        if matches!(connect_inner.send_state, SocketState::Close) {
+        if matches!(connect_inner.send_state, ConnectState::Close) {
             return Poll::Ready(Ok(()));
         }
-        if matches!(connect_inner.send_state, SocketState::Normal) {
-            connect_inner.send_state = SocketState::Close;
+        if matches!(connect_inner.send_state, ConnectState::Normal) {
+            connect_inner.send_state = ConnectState::Close;
         }
 
         if let Some(waker) = connect_inner.send_waker.replace(cx.waker().clone()) {
@@ -215,8 +215,8 @@ impl TcpConnect {
             send_buf: RingBuffer::new(vec![0u8; send_buffer_size]),
             send_waker: None,
             recv_waker: None,
-            recv_state: SocketState::Normal,
-            send_state: SocketState::Normal,
+            recv_state: ConnectState::Normal,
+            send_state: ConnectState::Normal,
         }));
         let (tx, rx) = oneshot::channel();
         let _ = create_tx.send(CreateTcpConnect {
@@ -292,8 +292,8 @@ impl TcpTun {
                 // if socket closed, process the connect inner.
                 if sock.state() == TcpState::Closed {
                     remove_socks.push(handle);
-                    conn_inner.recv_state = SocketState::Closed;
-                    conn_inner.send_state = SocketState::Closed;
+                    conn_inner.recv_state = ConnectState::Closed;
+                    conn_inner.send_state = ConnectState::Closed;
                     if let Some(waker) = conn_inner.send_waker.take() {
                         waker.wake();
                     }
@@ -305,13 +305,13 @@ impl TcpTun {
                 }
 
                 //SHUT_WR which poll shutdown.
-                if matches!(conn_inner.send_state, SocketState::Close)
+                if matches!(conn_inner.send_state, ConnectState::Close)
                     && conn_inner.send_buf.len() == 0
                     && sock.send_queue() == 0
                 {
                     trace!("closing TCP Write Half, {:?}", sock.state());
                     sock.close();
-                    conn_inner.send_state = SocketState::Closing;
+                    conn_inner.send_state = ConnectState::Closing;
                 }
 
                 // Check if readable, read all data from socket and put it to the connect recv buffer.
@@ -326,8 +326,8 @@ impl TcpTun {
                         Err(e) => {
                             error!("socket recv error: {:?}, {:?}", e, sock.state());
                             sock.abort();
-                            if matches!(conn_inner.recv_state, SocketState::Normal) {
-                                conn_inner.recv_state = SocketState::Closed
+                            if matches!(conn_inner.recv_state, ConnectState::Normal) {
+                                conn_inner.recv_state = ConnectState::Closed
                             }
                             wake_receiver = true;
                             break;
@@ -336,7 +336,7 @@ impl TcpTun {
                 }
                 // If socket is not in ESTABLISH, FIN-WAIT-1, FIN-WAIT-2,
                 // the local client have closed our receiver.
-                if matches!(conn_inner.recv_state, SocketState::Normal)
+                if matches!(conn_inner.recv_state, ConnectState::Normal)
                     && !sock.may_recv()
                     && !matches!(
                         sock.state(),
@@ -350,7 +350,7 @@ impl TcpTun {
                     trace!("closed TCP Read Half, {:?}", sock.state());
 
                     // Let TcpConnection::poll_read returns EOF.
-                    conn_inner.recv_state = SocketState::Closed;
+                    conn_inner.recv_state = ConnectState::Closed;
                     wake_receiver = true;
                 }
                 if wake_receiver && conn_inner.recv_waker.is_some() {
@@ -378,8 +378,8 @@ impl TcpTun {
                             // Don't know why. Abort the connection.
                             sock.abort();
 
-                            if matches!(conn_inner.send_state, SocketState::Normal) {
-                                conn_inner.send_state = SocketState::Closed;
+                            if matches!(conn_inner.send_state, ConnectState::Normal) {
+                                conn_inner.send_state = ConnectState::Closed;
                             }
                             wake_sender = true;
 
@@ -519,12 +519,12 @@ impl TcpTun {
             tokio::spawn(async move {
                 let mut tcp_conn = tcp_conn_fut.await;
                 let r_socket = tokio::net::TcpSocket::new_v4().unwrap();
-                r_socket.bind("10.4.126.67:0".parse().unwrap()).unwrap();
-
+                r_socket.bind("192.168.3.73:0".parse().unwrap()).unwrap();
+                set_ip_bound_if(&r_socket, &dst_addr, "en0").unwrap();
                 let mut proxy_conn = match r_socket.connect(dst_addr).await {
                     Ok(c) => c,
                     Err(e) => {
-                        error!("connect remote error: {}", e);
+                        error!("connect remote {} error: {}", dst_addr, e);
                         return;
                     }
                 };

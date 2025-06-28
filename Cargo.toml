@@ -18,7 +18,7 @@ edition = "2024"
 
 [workspace.dependencies]
 log = "0.4.27"
-futures-core = "0.3.31"
+futures-core  = "0.3.31"
 hickory-resolver = "0.25.2"
 tokio = { version = "1.45.1", features = [
     "net",
@@ -41,13 +41,11 @@ spin = "0.10.0"
 oneshot = "0.1.11"
 rand = "0.9.1"
 byte_string = "1.0.0"
+env_logger = "0.11.8"
+etherparse = "0.18.0"
 
 [dependencies]
-fake_dns = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
-libc.workspace = true
-bytes = { workspace = true }
-futures = { workspace = true }
-smoltcp = { workspace = true }
 librtun.workspace = true
+env_logger.workspace = true

@@ -1,11 +1,12 @@
 mod net;
-mod tcp_tun;
+mod tcp;
+mod udp;
 mod virtual_device;
 
 use byte_string::ByteStr;
 use ipnet::IpNet;
 use log::{debug, error, trace, warn};
-use smoltcp::wire::{IpProtocol, IpVersion, Ipv4Packet, Ipv6Packet, TcpPacket};
+use smoltcp::wire::{IpProtocol, IpVersion, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
 use std::{
     io::{self, Result as IOResult},
     net::{IpAddr, SocketAddr},
@@ -16,7 +17,7 @@ use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };
 
-use crate::{tcp_tun::TcpTun, virtual_device::TokenBuffer};
+use crate::{tcp::TcpTun, udp::UdpTun, virtual_device::TokenBuffer};
 
 enum IpPacket<T: AsRef<[u8]>> {
     Ipv4(Ipv4Packet<T>),
@@ -108,12 +109,18 @@ impl TunBuilder {
 pub struct Tun {
     device: AsyncDevice,
     tcp_tun: TcpTun,
+    udp_tun: UdpTun,
 }
 
 impl Tun {
     pub fn new(device: AsyncDevice) -> Self {
         let tcp_tun = TcpTun::new(1500);
-        Self { device, tcp_tun }
+        let udp_tun = UdpTun::new();
+        Self {
+            device,
+            tcp_tun,
+            udp_tun,
+        }
     }
 
     pub async fn run(mut self) -> IOResult<()> {
@@ -167,6 +174,19 @@ impl Tun {
                     }
                     let _ = self.handle_dev_packet(&address_broadcast, packet);
                 },
+                packet = self.udp_tun.recv_packet() => {
+                    match self.device.write(&packet).await {
+                        Ok(n) => {
+                            if n < packet.len() {
+                                warn!("[TUN] sent IP packet (UDP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
+                            } else {
+                                trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
+                            }
+                        },
+                        Err(e) =>
+                            error!("[TUN] failed to set packet information, error: {}, {:?}", e, ByteStr::new(&packet)),
+                    }
+                }
                 packet = self.tcp_tun.recv_packet() => {
                     match self.device.write(&packet).await {
                         Ok(n) => {
@@ -252,6 +272,32 @@ impl Tun {
                 }
                 // send raw data to tcp stack.
                 self.tcp_tun.send_tcp_frame(frame);
+            }
+            IpProtocol::Udp => {
+                let udp_packet = match UdpPacket::new_checked(ip_pkg.payload()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!(
+                            "invalid UDP packet err: {}, src_ip: {}, dst_ip: {}, payload: {:?}",
+                            e,
+                            ip_pkg.src_addr(),
+                            ip_pkg.dst_addr(),
+                            ByteStr::new(ip_pkg.payload())
+                        );
+                        return Ok(());
+                    }
+                };
+                let src_port = udp_packet.src_port();
+                let dst_port = udp_packet.dst_port();
+
+                let src_addr = SocketAddr::new(ip_pkg.src_addr(), src_port);
+                let dst_addr = SocketAddr::new(ip_pkg.dst_addr(), dst_port);
+                if let Err(e) = self.udp_tun.handle_packet(src_addr, dst_addr, &udp_packet) {
+                    error!(
+                        "handle Udp packet failed, error: {}, {} <-> {}, packet: {:?}",
+                        e, src_addr, dst_addr, udp_packet
+                    );
+                }
             }
             _ => {
                 debug!("IP packet ignored (protocol: {:?})", ip_pkg.protocol());
