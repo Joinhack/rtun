@@ -1,165 +1,97 @@
-use bytes::{BufMut, Bytes, BytesMut};
-use etherparse::PacketBuilder;
-use log::{error, info, warn};
-use smoltcp::wire::UdpPacket;
-use spin::mutex::SpinMutex;
+use futures::StreamExt;
+use log::{debug, error};
+use netstack_lwip::UdpSocket;
+use std::collections::hash_map::Entry;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{collections::HashMap, io};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc::{Sender, channel};
+use tokio::time;
 
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    net::SocketAddr,
-    sync::Arc,
-};
-use tokio::{
-    io,
-    net::UdpSocket,
-    sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-};
+use std::{net::SocketAddr, pin::Pin};
 
-use crate::net::set_ip_bound_if;
+use crate::{net::create_outbound_udp_socket, option::UDP_RECV_CH_SIZE};
 
-type DestChType = Arc<SpinMutex<HashMap<(SocketAddr, SocketAddr), UnboundedSender<Bytes>>>>;
-
-pub struct UdpTun {
-    proxy_tx_chs: DestChType,
-    recv_ch_rx: UnboundedReceiver<BytesMut>,
-    recv_ch_tx: UnboundedSender<BytesMut>,
+struct UdpPkg {
+    payload: Vec<u8>,
 }
 
-struct UdpInboundWriter {
-    src_addr: SocketAddr,
-    dest_addr: SocketAddr,
-}
+pub struct UdpHandle {}
 
-impl UdpInboundWriter {
-    fn write(&self, data: Bytes) -> io::Result<BytesMut> {
-        match (self.src_addr, self.dest_addr) {
-            (SocketAddr::V4(s_v4), SocketAddr::V4(d_v4)) => {
-                let builder = PacketBuilder::ipv4(d_v4.ip().octets(), s_v4.ip().octets(), 20)
-                    .udp(d_v4.port(), s_v4.port());
-                let packet = BytesMut::with_capacity(builder.size(data.len()));
-                let mut packet_writer = packet.writer();
-                builder
-                    .write(&mut packet_writer, &data)
-                    .expect("packet writer error.");
-                return Ok(packet_writer.into_inner());
-            }
-            (SocketAddr::V6(s_v6), SocketAddr::V6(d_v6)) => {
-                let builder = PacketBuilder::ipv6(d_v6.ip().octets(), s_v6.ip().octets(), 20)
-                    .udp(d_v6.port(), s_v6.port());
-                let packet = BytesMut::with_capacity(builder.size(data.len()));
-                let mut packet_writer = packet.writer();
-                builder
-                    .write(&mut packet_writer, &data)
-                    .expect("packet writer error.");
-                return Ok(packet_writer.into_inner());
-            }
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "source destitition type not match.",
-                ));
-            }
-        };
-    }
-}
-
-impl UdpTun {
+impl UdpHandle {
     pub fn new() -> Self {
-        let (tx, rx) = unbounded_channel();
-        Self {
-            proxy_tx_chs: Default::default(),
-            recv_ch_rx: rx,
-            recv_ch_tx: tx,
-        }
+        Self {}
     }
+    pub async fn handle_udp_socket(&self, udp_socket: Pin<Box<UdpSocket>>) -> io::Result<()> {
+        let (udp_tx, mut udp_rx) = udp_socket.split();
 
-    pub async fn recv_packet(&mut self) -> BytesMut {
-        match self.recv_ch_rx.recv().await {
-            Some(d) => d,
-            None => unimplemented!("the recv channel closed."),
-        }
-    }
-
-    pub fn handle_packet(
-        &mut self,
-        src_addr: SocketAddr,
-        dest_addr: SocketAddr,
-        udp: &UdpPacket<&[u8]>,
-    ) -> io::Result<()> {
-        let bs = Bytes::copy_from_slice(udp.payload());
-        if let Entry::Occupied(mut ch) = self.proxy_tx_chs.lock().entry((src_addr, dest_addr)) {
-            match ch.get_mut().send(bs) {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    error!(
-                        "the udp proxy is close {} {} error: {}",
-                        src_addr, dest_addr, e
-                    );
-                    // proxy task is finish, the channel is closed.
-                    ch.remove();
+        let sessions = Arc::new(Mutex::new(HashMap::<SocketAddr, Sender<UdpPkg>>::new()));
+        let udp_tx = Arc::new(udp_tx);
+        while let Some((data, s_addr, d_addr)) = udp_rx.next().await {
+            let mut sesses = sessions.lock().await;
+            let entry = sesses.entry(s_addr);
+            match entry {
+                Entry::Occupied(mut entry) => {
+                    if let Err(e) = entry.get_mut().send(UdpPkg { payload: data }).await {
+                        error!("send channel is closed, error: {}", e);
+                        entry.remove();
+                    }
                 }
-            };
-        } else {
-            let proxy_tx = self.recv_ch_tx.clone();
-            let (proxy_ch_tx, mut proxy_ch_rx) = unbounded_channel();
-            proxy_ch_tx.send(bs).unwrap();
-            info!("udp create proxy source:{src_addr}  destition:{dest_addr}");
-            self.proxy_tx_chs
-                .lock()
-                .insert((src_addr, dest_addr), proxy_ch_tx);
-            tokio::spawn(async move {
-                let proxy_udp = UdpSocket::bind("192.168.3.73:0").await.unwrap();
-                set_ip_bound_if(&proxy_udp, &src_addr, "en0").unwrap();
-                let mut buf = BytesMut::with_capacity(65535);
-                loop {
-                    tokio::select! {
-                        data = proxy_udp.recv(&mut buf) => {
-                            match data {
-                                Ok(n) => {
-                                    let writer = UdpInboundWriter {
-                                        src_addr,
-                                        dest_addr,
-                                    };
-                                    let data = buf.split_to(n).freeze();
-                                    let data = match writer.write(data) {
-                                        Ok(d) => d,
-                                        Err(e) => {
-                                            error!("packat process error, {}", e);
-                                            continue;
-                                        },
-                                    };
-                                    // when recv from proxy socket, send back to device through channel.
-                                    if let Err(e) = proxy_tx.send(data) {
-                                        unimplemented!("proxy send channel can't be closed, {}", e);
-                                    };
-                                },
-                                Err(e) => {
-                                    // proxy socket is break.
-                                    error!("recv from proxy error {}", e);
-                                    return;
-                                },
-                            }
-                        },
-                        data = proxy_ch_rx.recv() => {
-                            match data {
-                                Some(d) => {
-                                    match proxy_udp.send_to(&d, dest_addr).await {
-                                        Ok(_) => {},
-                                        Err(e) => {
-                                            error!("udp proxy send error, dest addr {}, {}", dest_addr, e);
-                                            return;
-                                        }
-                                    }
-                                },
+                Entry::Vacant(vacant) => {
+                    let (tx, mut rx) = channel::<UdpPkg>(*UDP_RECV_CH_SIZE);
+                    tx.send(UdpPkg { payload: data }).await.unwrap();
+                    let proxy_udp = create_outbound_udp_socket(&d_addr).unwrap();
+                    let proxy_udp = Arc::new(proxy_udp);
+                    let proxy_udp_cl = proxy_udp.clone();
+                    vacant.insert(tx);
+                    tokio::spawn(async move {
+                        loop {
+                            let pkg = match rx.recv().await {
+                                Some(pkg) => pkg,
                                 None => {
-                                    warn!("proxy channel is closed.");
+                                    error!("udp recv channel closed");
                                     return;
-                                },
+                                }
+                            };
+                            match proxy_udp_cl.send_to(&pkg.payload, d_addr).await {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!("send to {} error: {}", d_addr, e);
+                                    return;
+                                }
                             }
                         }
-                    };
+                    });
+                    let udp_tx_cl = udp_tx.clone();
+                    let sessions = sessions.clone();
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 65535];
+                        let s_addr = s_addr;
+                        loop {
+                            let timeout = time::timeout(
+                                Duration::from_secs(5),
+                                proxy_udp.recv_from(&mut buf),
+                            );
+                            match timeout.await {
+                                Ok(Ok((n, dest_addr))) => {
+                                    udp_tx_cl.send_to(&buf[..n], &dest_addr, &s_addr).unwrap();
+                                }
+                                Ok(Err(e)) => {
+                                    error!("proxy recv error: {}", e);
+                                    return;
+                                }
+                                Err(_) => {
+                                    let mut sesses = sessions.lock().await;
+                                    debug!("session size: {}", sesses.len());
+                                    sesses.remove(&s_addr);
+                                    return;
+                                }
+                            }
+                        }
+                    });
                 }
-            });
+            };
         }
         Ok(())
     }

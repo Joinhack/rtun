@@ -1,70 +1,28 @@
+mod cmd;
 mod net;
+mod option;
 mod tcp;
 mod udp;
-mod virtual_device;
 
-use byte_string::ByteStr;
-use ipnet::IpNet;
-use log::{debug, error, trace, warn};
-use smoltcp::wire::{IpProtocol, IpVersion, Ipv4Packet, Ipv6Packet, TcpPacket, UdpPacket};
-use std::{
-    io::{self, Result as IOResult},
-    net::{IpAddr, SocketAddr},
-};
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use anyhow::Result;
+use futures::{SinkExt, StreamExt};
+use log::error;
+use std::env;
+use std::future::Future;
+use std::{io, pin::Pin};
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };
 
-use crate::{tcp::TcpTun, udp::UdpTun, virtual_device::TokenBuffer};
+use netstack_lwip as netstack;
 
-enum IpPacket<T: AsRef<[u8]>> {
-    Ipv4(Ipv4Packet<T>),
-    Ipv6(Ipv6Packet<T>),
-}
-
-impl<'a, T: AsRef<[u8]> + ?Sized> IpPacket<&'a T> {
-    /// Return a pointer to the payload.
-    #[inline]
-    pub fn payload(&self) -> &'a [u8] {
-        match *self {
-            IpPacket::Ipv4(ref packet) => packet.payload(),
-            IpPacket::Ipv6(ref packet) => packet.payload(),
-        }
-    }
-}
-
-impl<T: AsRef<[u8]>> IpPacket<T> {
-    pub fn new_checked(packet: T) -> smoltcp::wire::Result<Option<Self>> {
-        let buffer = packet.as_ref();
-        match IpVersion::of_packet(buffer)? {
-            IpVersion::Ipv4 => Ok(Some(Self::Ipv4(Ipv4Packet::new_checked(packet)?))),
-            IpVersion::Ipv6 => Ok(Some(Self::Ipv6(Ipv6Packet::new_checked(packet)?))),
-        }
-    }
-
-    pub fn src_addr(&self) -> IpAddr {
-        match *self {
-            Self::Ipv4(ref packet) => IpAddr::from(packet.src_addr()),
-            Self::Ipv6(ref packet) => IpAddr::from(packet.src_addr()),
-        }
-    }
-
-    pub fn dst_addr(&self) -> IpAddr {
-        match *self {
-            Self::Ipv4(ref packet) => IpAddr::from(packet.dst_addr()),
-            Self::Ipv6(ref packet) => IpAddr::from(packet.dst_addr()),
-        }
-    }
-
-    pub fn protocol(&self) -> IpProtocol {
-        match *self {
-            Self::Ipv4(ref packet) => packet.next_header(),
-            Self::Ipv6(ref packet) => packet.next_header(),
-        }
-    }
-}
+use crate::cmd::{add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface};
+use crate::option::{
+    NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME, TUN_ADDRESS,
+    TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
+};
+use crate::tcp::TcpHandle;
+use crate::udp::UdpHandle;
 
 pub struct TunBuilder {
     tun_config: TunConfiguration,
@@ -72,9 +30,12 @@ pub struct TunBuilder {
 
 impl TunBuilder {
     pub fn new() -> Self {
-        Self {
-            tun_config: Default::default(),
-        }
+        let mut tun_config = TunConfiguration::default();
+        tun_config.address(*TUN_ADDRESS);
+        tun_config.destination(*TUN_GATEWAY);
+        tun_config.netmask(*TUN_NETMASK);
+        tun_config.tun_name(TUN_DEFAULT_NAME.as_str());
+        Self { tun_config }
     }
     pub fn address<Addr: ToAddress>(&mut self, addr: Addr) -> &mut TunBuilder {
         self.tun_config.address(addr);
@@ -96,7 +57,7 @@ impl TunBuilder {
         self
     }
 
-    pub fn build(&self) -> IOResult<Tun> {
+    pub fn build(&self) -> Result<Tun> {
         let device = match create_as_async(&self.tun_config) {
             Ok(device) => Ok(device),
             Err(tun::Error::Io(e)) => Err(e),
@@ -108,203 +69,140 @@ impl TunBuilder {
 
 pub struct Tun {
     device: AsyncDevice,
-    tcp_tun: TcpTun,
-    udp_tun: UdpTun,
+}
+
+struct PostTunSetup {
+    gw: String,
+    iface: String,
+    default_gw: String,
+    default_iface: String,
+}
+
+impl PostTunSetup {
+    fn new(gw: String, iface: String) -> Result<Self> {
+        let (default_gw, default_iface) = get_default_gw_iface()?;
+        Ok(Self {
+            gw,
+            iface,
+            default_gw,
+            default_iface,
+        })
+    }
+
+    fn setup(&self) -> Result<()> {
+        delete_default_ipv4_route(None)?;
+        add_default_ipv4_route(&self.gw, &self.iface, true)?;
+        add_default_ipv4_route(&self.default_gw, &self.default_iface, false)?;
+        Ok(())
+    }
+
+    fn unsetup(&self) -> Result<()> {
+        delete_default_ipv4_route(Some(&self.default_iface))?;
+        add_default_ipv4_route(&self.default_gw, &self.default_iface, true)?;
+        Ok(())
+    }
+}
+
+impl Drop for PostTunSetup {
+    fn drop(&mut self) {
+        self.unsetup().unwrap();
+    }
 }
 
 impl Tun {
     pub fn new(device: AsyncDevice) -> Self {
-        let tcp_tun = TcpTun::new(1500);
-        let udp_tun = UdpTun::new();
-        Self {
-            device,
-            tcp_tun,
-            udp_tun,
-        }
+        Self { device }
     }
 
-    pub async fn run(mut self) -> IOResult<()> {
-        let address = match self.device.address() {
+    pub async fn run(self) -> Result<()> {
+        let destination = match self.device.destination() {
             Ok(a) => a,
             Err(err) => {
-                error!("[TUN] failed to get device address, error: {}", err);
-                return Err(io::Error::other(err));
+                error!("[TUN] failed to get device peer address, error: {}", err);
+                return Err(err.into());
             }
         };
 
-        let netmask = match self.device.netmask() {
-            Ok(n) => n,
+        let iface = match self.device.tun_name() {
+            Ok(a) => a,
             Err(err) => {
-                error!("[TUN] failed to get device netmask, error: {}", err);
-                return Err(io::Error::other(err));
+                error!("[TUN] failed to get device name, error: {}", err);
+                return Err(err.into());
             }
         };
 
-        let address_net = match IpNet::with_netmask(address, netmask) {
-            Ok(n) => n,
-            Err(err) => {
-                error!(
-                    "[TUN] invalid address {}, netmask {}, error: {}",
-                    address, netmask, err
+        let tun_setup = PostTunSetup::new(destination.to_string(), iface).unwrap();
+        tun_setup.setup().unwrap();
+        if let Err(_) = env::var(OUTBOUND_INTERFACES_NAME) {
+            unsafe {
+                env::set_var(
+                    OUTBOUND_INTERFACES_NAME,
+                    tun_setup.default_iface.to_string(),
                 );
-                return Err(io::Error::other(err));
-            }
-        };
-
-        trace!(
-            "[TUN] tun device network: {} (address: {}, netmask: {})",
-            address_net, address, netmask
-        );
-
-        let address_broadcast = address_net.broadcast();
-        let create_empty_package = || {
-            const PACKET_LEN: usize = 65535;
-            let mut packet_buffer = TokenBuffer::with_capacity(PACKET_LEN);
-            unsafe { packet_buffer.set_len(PACKET_LEN) };
-            packet_buffer
-        };
-        let mut packet_buffer = create_empty_package();
-        loop {
-            tokio::select! {
-                n = self.device.read(&mut packet_buffer) => {
-                    let n = n?;
-                    let mut packet = std::mem::replace(& mut packet_buffer, create_empty_package());
-                    unsafe {
-                        packet.set_len(n);
-                    }
-                    let _ = self.handle_dev_packet(&address_broadcast, packet);
-                },
-                packet = self.udp_tun.recv_packet() => {
-                    match self.device.write(&packet).await {
-                        Ok(n) => {
-                            if n < packet.len() {
-                                warn!("[TUN] sent IP packet (UDP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
-                            } else {
-                                trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
-                            }
-                        },
-                        Err(e) =>
-                            error!("[TUN] failed to set packet information, error: {}, {:?}", e, ByteStr::new(&packet)),
-                    }
-                }
-                packet = self.tcp_tun.recv_packet() => {
-                    match self.device.write(&packet).await {
-                        Ok(n) => {
-                            if n < packet.len() {
-                                warn!("[TUN] sent IP packet (TCP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
-                            } else {
-                                trace!("[TUN] sent IP packet (TCP) {:?}", ByteStr::new(&packet));
-                            }
-                        },
-                        Err(e) =>
-                            error!("[TUN] failed to set packet information, error: {}, {:?}", e, ByteStr::new(&packet)),
-                    }
-
-                }
             }
         }
-    }
 
-    pub fn handle_dev_packet(
-        &mut self,
-        device_broadcast_addr: &IpAddr,
-        frame: TokenBuffer,
-    ) -> smoltcp::wire::Result<()> {
-        let ip_pkg = match IpPacket::new_checked(frame.as_ref())? {
-            Some(pkg) => pkg,
-            None => {
-                return Ok(());
-            }
-        };
-        let src_ip_addr = ip_pkg.src_addr();
-        let dst_ip_addr = ip_pkg.dst_addr();
-        let src_non_unicast = src_ip_addr == *device_broadcast_addr
-            || match src_ip_addr {
-                IpAddr::V4(v4) => v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified(),
-                IpAddr::V6(v6) => v6.is_multicast() || v6.is_unspecified(),
-            };
-        let dst_non_unicast = dst_ip_addr == *device_broadcast_addr
-            || match dst_ip_addr {
-                IpAddr::V4(v4) => v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified(),
-                IpAddr::V6(v6) => v6.is_multicast() || v6.is_unspecified(),
-            };
-        if src_non_unicast || dst_non_unicast {
-            trace!(
-                "[TUN] IP packet {} (unicast? {}) -> {} (unicast? {}) throwing away",
-                src_ip_addr, !src_non_unicast, dst_ip_addr, !dst_non_unicast
-            );
-            return Ok(());
-        }
-        match ip_pkg.protocol() {
-            IpProtocol::Tcp => {
-                let tcp_packet = match TcpPacket::new_checked(ip_pkg.payload()) {
-                    Ok(p) => p,
-                    Err(err) => {
-                        error!(
-                            "invalid TCP packet err: {}, src_ip: {}, dst_ip: {}, payload: {:?}",
-                            err,
-                            ip_pkg.src_addr(),
-                            ip_pkg.dst_addr(),
-                            ByteStr::new(ip_pkg.payload())
-                        );
-                        return Ok(());
+        let (stack, mut tcp_listner, udp_socket) =
+            netstack::NetStack::with_buffer_size(*NETSTACK_BUFF_SIZE, *NETSTACK_UDP_BUFF_SIZE)?;
+        let mut futs: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
+        let (mut stack_sink, mut stack_stream) = stack.split();
+        let dev_frame = self.device.into_framed();
+        let (mut tun_sink, mut tun_stream) = dev_frame.split();
+
+        let stack_stream_fut = Box::pin(async move {
+            while let Some(pkg) = stack_stream.next().await {
+                match pkg {
+                    Ok(pkg) => {
+                        if let Err(e) = tun_sink.send(pkg).await {
+                            error!("device send error :{}", e);
+                            return;
+                        }
                     }
-                };
-                let src_port = tcp_packet.src_port();
-                let dst_port = tcp_packet.dst_port();
-
-                let src_addr = SocketAddr::new(ip_pkg.src_addr(), src_port);
-                let dst_addr = SocketAddr::new(ip_pkg.dst_addr(), dst_port);
-                trace!(
-                    "[TUN] TCP packet {} (unicast? {}) -> {} (unicast? {}) {}",
-                    src_addr, !src_non_unicast, dst_addr, !dst_non_unicast, tcp_packet
-                );
-
-                // TCP first handshake packet.
-                if let Err(err) = self
-                    .tcp_tun
-                    .intercept_tcp_syn(src_addr, dst_addr, &tcp_packet)
-                {
-                    error!(
-                        "handle TCP packet failed, error: {}, {} <-> {}, packet: {:?}",
-                        err, src_addr, dst_addr, tcp_packet
-                    );
-                }
-                // send raw data to tcp stack.
-                self.tcp_tun.send_tcp_frame(frame);
-            }
-            IpProtocol::Udp => {
-                let udp_packet = match UdpPacket::new_checked(ip_pkg.payload()) {
-                    Ok(p) => p,
                     Err(e) => {
-                        error!(
-                            "invalid UDP packet err: {}, src_ip: {}, dst_ip: {}, payload: {:?}",
-                            e,
-                            ip_pkg.src_addr(),
-                            ip_pkg.dst_addr(),
-                            ByteStr::new(ip_pkg.payload())
-                        );
-                        return Ok(());
+                        error!("stack stream next error :{}", e);
+                        return;
                     }
                 };
-                let src_port = udp_packet.src_port();
-                let dst_port = udp_packet.dst_port();
-
-                let src_addr = SocketAddr::new(ip_pkg.src_addr(), src_port);
-                let dst_addr = SocketAddr::new(ip_pkg.dst_addr(), dst_port);
-                if let Err(e) = self.udp_tun.handle_packet(src_addr, dst_addr, &udp_packet) {
-                    error!(
-                        "handle Udp packet failed, error: {}, {} <-> {}, packet: {:?}",
-                        e, src_addr, dst_addr, udp_packet
-                    );
-                }
             }
-            _ => {
-                debug!("IP packet ignored (protocol: {:?})", ip_pkg.protocol());
-
-                return Ok(());
+        });
+        futs.push(stack_stream_fut);
+        let tun_stream_fut = Box::pin(async move {
+            while let Some(pkg) = tun_stream.next().await {
+                match pkg {
+                    Ok(pkg) => {
+                        if let Err(e) = stack_sink.send(pkg).await {
+                            error!("stack send error :{}", e);
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        error!("tun stream next error :{}", e);
+                        return;
+                    }
+                };
             }
-        }
+        });
+        futs.push(tun_stream_fut);
+        let tcp_listener_fut = Box::pin(async move {
+            while let Some((stream, local_addr, remote_addr)) = tcp_listner.next().await {
+                let tcp_handle = TcpHandle::new();
+                let _ = tcp_handle
+                    .handle_tcp_stream(local_addr, remote_addr, stream)
+                    .await;
+            }
+        });
+        futs.push(tcp_listener_fut);
+        let udp_socket_fut = Box::pin(async move {
+            let udp_handle = UdpHandle::new();
+            let _ = udp_handle.handle_udp_socket(udp_socket).await;
+        });
+        futs.push(udp_socket_fut);
+
+        futs.push(Box::pin(async {
+            let _ = tokio::signal::ctrl_c().await;
+        }));
+
+        futures::future::select_all(futs).await;
         Ok(())
     }
 }

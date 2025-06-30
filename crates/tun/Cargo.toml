@@ -6,7 +6,6 @@ edition = { workspace = true }
 homepage = { workspace = true }
 
 [dependencies]
-smoltcp = { workspace = true, features = ["socket-tcp-cubic"] }
 bytes = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
@@ -16,5 +15,9 @@ rand = { workspace = true }
 byte_string = { workspace = true }
 ipnet = { workspace = true }
 libc = { workspace = true }
-etherparse = { workspace = true }
 tun = { workspace = true, features = ["async"] }
+netstack-lwip = { workspace = true }
+lazy_static = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+socket2 = { workspace = true }
