@@ -11,6 +11,7 @@ use tokio::time;
 
 use std::{net::SocketAddr, pin::Pin};
 
+use crate::option::UDP_SESSION_TIMEOUT;
 use crate::{net::create_outbound_udp_socket, option::UDP_RECV_CH_SIZE};
 
 struct UdpPkg {
@@ -70,7 +71,7 @@ impl UdpHandle {
                         let s_addr = s_addr;
                         loop {
                             let timeout = time::timeout(
-                                Duration::from_secs(5),
+                                Duration::from_secs(*UDP_SESSION_TIMEOUT),
                                 proxy_udp.recv_from(&mut buf),
                             );
                             match timeout.await {

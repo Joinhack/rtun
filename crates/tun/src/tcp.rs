@@ -3,11 +3,12 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::net::create_outbound_tcp_socket;
-use crate::option::OUTBOUND_CONNECT_TIMEOUT;
+use crate::net::{copy_bidirectional_with_timeout, create_outbound_tcp_socket};
+use crate::option::{
+    DOWNLINK_COPY_TIMEOUT, LINK_BUFFER_SIZE, OUTBOUND_CONNECT_TIMEOUT, UPLINK_COPY_TIMEOUT,
+};
 use log::{debug, error, info};
 use netstack_lwip::TcpStream;
-use tokio::io::copy_bidirectional;
 use tokio::time;
 
 pub struct TcpHandle {}
@@ -48,7 +49,15 @@ impl TcpHandle {
             };
 
             debug!("created TCP connection for {} <-> {}", src_addr, dst_addr);
-            if let Err(e) = copy_bidirectional(&mut tcp_stream, &mut proxy_conn).await {
+            if let Err(e) = copy_bidirectional_with_timeout(
+                &mut tcp_stream,
+                &mut proxy_conn,
+                *LINK_BUFFER_SIZE * 1024,
+                Duration::from_secs(*DOWNLINK_COPY_TIMEOUT),
+                Duration::from_secs(*UPLINK_COPY_TIMEOUT),
+            )
+            .await
+            {
                 error!("connect copy error: {}", e);
             }
         });

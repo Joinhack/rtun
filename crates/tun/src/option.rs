@@ -9,6 +9,10 @@ lazy_static! {
     pub static ref UDP_RECV_CH_SIZE: usize = get_env_var_or("UDP_RECV_CH_SIZE", 256);
     pub static ref OUTBOUND_CONNECT_TIMEOUT: u64 = get_env_var_or("TCP_CONNECT_TIMEOUT", 5);
     pub static ref TUN_DEFAULT_NAME: String = get_env_var_or("TUN_DEFAULT_NAME", "utun200".into());
+    pub static ref DOWNLINK_COPY_TIMEOUT: u64 = get_env_var_or("DOWNLINK_COPY_TIMEOUT", 10);
+    pub static ref UPLINK_COPY_TIMEOUT: u64 = get_env_var_or("UPLINK_COPY_TIMEOUT", 10);
+    pub static ref LINK_BUFFER_SIZE: usize = get_env_var_or("LINK_BUFFER_SIZE", 2);
+    pub static ref UDP_SESSION_TIMEOUT: u64 = get_env_var_or("UDP_SESSION_TIMEOUT", 3);
     pub static ref TUN_ADDRESS: Ipv4Addr =
         get_env_var_or("TUN_ADDRESS", "192.16.0.1".parse().unwrap());
     pub static ref TUN_GATEWAY: Ipv4Addr =
