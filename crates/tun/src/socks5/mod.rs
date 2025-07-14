@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{
     fmt, io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
@@ -7,6 +8,7 @@ use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 mod tcp_client;
+#[allow(unused_imports)]
 pub use tcp_client::*;
 
 pub const SOCKS5_VERSION: u8 = 0x5;
