@@ -36,6 +36,11 @@ impl TcpHandle {
                 Duration::from_secs(*OUTBOUND_CONNECT_TIMEOUT),
                 r_socket.connect(dst_addr),
             );
+
+            // let stream =
+            // socks5::Sock5TcpStream::connect(dst_addr, "127.0.0.1:1086".parse().unwrap());
+            // let connect_timeout =
+            // time::timeout(Duration::from_secs(*OUTBOUND_CONNECT_TIMEOUT), stream);
             let mut proxy_conn = match connect_timeout.await {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {

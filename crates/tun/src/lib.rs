@@ -1,6 +1,7 @@
 mod cmd;
 mod net;
 mod option;
+mod socks5;
 mod tcp;
 mod udp;
 
