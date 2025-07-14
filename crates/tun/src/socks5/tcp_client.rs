@@ -7,7 +7,7 @@ use tokio::{
 
 use crate::socks5::{
     HandShakeRequest, HandShakeResponse, Reply, SOCKS5_AUTH_METHOD_NONE, SOCKS5_CMD_TCP_CONNECT,
-    Socks5TcpRequest, Socks5TcpResponse,
+    Socks5Addr, Socks5TcpRequest, Socks5TcpResponse,
 };
 
 pub struct Sock5TcpStream {
@@ -15,7 +15,7 @@ pub struct Sock5TcpStream {
 }
 
 impl Sock5TcpStream {
-    pub async fn connect(addr: SocketAddr, proxy: SocketAddr) -> io::Result<Self> {
+    pub async fn connect(addr: Socks5Addr, proxy: SocketAddr) -> io::Result<Self> {
         let mut stream = TcpStream::connect(proxy).await?;
         let req = HandShakeRequest::new(vec![SOCKS5_AUTH_METHOD_NONE]);
         req.write_to(&mut stream).await?;

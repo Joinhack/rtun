@@ -7,7 +7,7 @@ use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 mod tcp_client;
-pub use tcp_client::Sock5TcpStream;
+pub use tcp_client::*;
 
 pub const SOCKS5_VERSION: u8 = 0x5;
 pub const SOCKS5_AUTH_METHOD_NONE: u8 = 0x00;
@@ -154,6 +154,11 @@ impl HandShakeResponse {
     }
 }
 
+pub enum Socks5Addr {
+    SocketAddr(SocketAddr),
+    Domain(String, u16),
+}
+
 /// socks5 tcp request.
 /// ```plan
 /// +----+-----+-------+------+----------+----------+
@@ -164,12 +169,12 @@ impl HandShakeResponse {
 /// ```
 pub struct Socks5TcpRequest {
     command: u8,
-    addr: SocketAddr,
+    addr: Socks5Addr,
 }
 
 impl Socks5TcpRequest {
     #[inline]
-    pub fn new(command: u8, addr: SocketAddr) -> Self {
+    pub fn new(command: u8, addr: Socks5Addr) -> Self {
         Self { command, addr }
     }
     pub async fn write_to<W: AsyncWrite + Unpin>(&self, mut writer: W) -> io::Result<()> {
@@ -178,17 +183,23 @@ impl Socks5TcpRequest {
         buf.put_u8(self.command);
         buf.put_u8(0x00);
         match self.addr {
-            SocketAddr::V4(addr) => {
+            Socks5Addr::SocketAddr(SocketAddr::V4(addr)) => {
                 buf.put_u8(SOCKS5_ADDR_TYPE_IPV4);
                 let addr_octs = addr.ip().octets();
                 buf.put_slice(&addr_octs);
                 buf.put_u16(addr.port());
             }
-            SocketAddr::V6(addr) => {
+            Socks5Addr::SocketAddr(SocketAddr::V6(addr)) => {
                 buf.put_u8(SOCKS5_ADDR_TYPE_IPV6);
                 let addr_octs = addr.ip().octets();
                 buf.put_slice(&addr_octs);
                 buf.put_u16(addr.port());
+            }
+            Socks5Addr::Domain(ref domain, port) => {
+                buf.put_u8(SOCKS5_ADDR_TYPE_DOMAIN_NAME);
+                buf.put_u8(domain.len() as _);
+                buf.put_slice(domain.as_bytes());
+                buf.put_u16(port);
             }
         };
         writer.write_all(&buf).await
