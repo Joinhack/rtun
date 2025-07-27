@@ -13,6 +13,7 @@ use tokio::time;
 
 use std::{net::SocketAddr, pin::Pin};
 
+use crate::fakedns::{DNSProcessResult, FakeDNS};
 use crate::option::UDP_SESSION_TIMEOUT;
 use crate::{net::create_outbound_udp_socket, option::UDP_RECV_CH_SIZE};
 
@@ -24,12 +25,14 @@ type SessionMap = Arc<Mutex<HashMap<SocketAddr, Sender<UdpPkg>>>>;
 
 pub struct UdpHandle {
     sessions: SessionMap,
+    fake_dns: Arc<FakeDNS>,
 }
 
 impl UdpHandle {
-    pub fn new() -> Self {
+    pub fn new(fake_dns: Arc<FakeDNS>) -> Self {
         Self {
             sessions: Default::default(),
+            fake_dns,
         }
     }
 
@@ -91,6 +94,19 @@ impl UdpHandle {
                 }
             };
         while let Some((data, s_addr, d_addr)) = udp_rx.next().await {
+            if d_addr.port() == 53 {
+                match self.fake_dns.process_dns_packet(&data).await {
+                    // use upstream to resolve domain.
+                    Ok(DNSProcessResult::Upstream) => (),
+                    Ok(DNSProcessResult::Response(resp)) => {
+                        udp_tx.send_to(&resp, &d_addr, &s_addr)?;
+                    }
+                    Err(e) => {
+                        error!("error process dns: {e}");
+                        continue;
+                    }
+                }
+            }
             let mut sesses = sessions.lock().await;
             let entry = sesses.entry(s_addr);
             match entry {

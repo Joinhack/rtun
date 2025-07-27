@@ -232,7 +232,7 @@ impl Socks5TcpResponse {
             ));
         }
         let reply = buf[1];
-        let mut addr: SocketAddr;
+        let addr: SocketAddr;
         macro_rules! read_u16 {
             ($buf:ident, $i: literal) => {
                 u16::from_be_bytes([$buf[$i], $buf[$i + 1]])

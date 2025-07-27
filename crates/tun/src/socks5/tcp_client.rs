@@ -5,13 +5,24 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::socks5::{
-    HandShakeRequest, HandShakeResponse, Reply, SOCKS5_AUTH_METHOD_NONE, SOCKS5_CMD_TCP_CONNECT,
-    Socks5Addr, Socks5TcpRequest, Socks5TcpResponse,
+use crate::{
+    net::CopyTrait,
+    socks5::{
+        HandShakeRequest, HandShakeResponse, Reply, SOCKS5_AUTH_METHOD_NONE,
+        SOCKS5_CMD_TCP_CONNECT, Socks5Addr, Socks5TcpRequest, Socks5TcpResponse,
+    },
 };
 
 pub struct Sock5TcpStream {
     stream: TcpStream,
+}
+
+impl CopyTrait for Sock5TcpStream {}
+
+impl Into<Box<dyn CopyTrait>> for Sock5TcpStream {
+    fn into(self) -> Box<dyn CopyTrait> {
+        Box::new(self)
+    }
 }
 
 impl Sock5TcpStream {

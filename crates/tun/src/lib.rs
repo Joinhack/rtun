@@ -1,4 +1,5 @@
 mod cmd;
+mod fakedns;
 mod net;
 mod option;
 mod socks5;
@@ -10,6 +11,7 @@ use futures::{SinkExt, StreamExt};
 use log::error;
 use std::env;
 use std::future::Future;
+use std::sync::Arc;
 use std::{io, pin::Pin};
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
@@ -18,6 +20,7 @@ use tun::{
 use netstack_lwip as netstack;
 
 use crate::cmd::{add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface};
+use crate::fakedns::FakeDNS;
 use crate::option::{
     NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME, TUN_ADDRESS,
     TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
@@ -184,9 +187,15 @@ impl Tun {
             }
         });
         futs.push(tun_stream_fut);
+        let fake_dns = FakeDNS::new()?;
+        fake_dns.add_filter("www.163.com").await;
+        fake_dns.add_filter("ifconfig.me").await;
+        fake_dns.add_filter("github.com").await;
+        let fake_dns = Arc::new(fake_dns);
+        let fake_dns_cl = fake_dns.clone();
         let tcp_listener_fut = Box::pin(async move {
+            let tcp_handle = TcpHandle::new(fake_dns_cl);
             while let Some((stream, local_addr, remote_addr)) = tcp_listner.next().await {
-                let tcp_handle = TcpHandle::new();
                 let _ = tcp_handle
                     .handle_tcp_stream(local_addr, remote_addr, stream)
                     .await;
@@ -194,7 +203,7 @@ impl Tun {
         });
         futs.push(tcp_listener_fut);
         let udp_socket_fut = Box::pin(async move {
-            let udp_handle = UdpHandle::new();
+            let udp_handle = UdpHandle::new(fake_dns);
             let _ = udp_handle.handle_udp_socket(udp_socket).await;
         });
         futs.push(udp_socket_fut);

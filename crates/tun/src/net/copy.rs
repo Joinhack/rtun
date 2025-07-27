@@ -233,3 +233,5 @@ where
     };
     copy.await
 }
+
+pub trait CopyTrait: AsyncRead + AsyncWrite + Unpin + Send {}
