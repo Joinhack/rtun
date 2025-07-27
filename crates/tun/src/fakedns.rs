@@ -31,6 +31,10 @@ impl FakeDNS {
         self.0.write().await.add_filter(domain);
     }
 
+    pub async fn set_filter(&self, filter: Vec<String>) {
+        self.0.write().await.set_filter(filter);
+    }
+
     pub async fn accept(&self, domain: &str) -> bool {
         self.0.read().await.accept(domain)
     }
@@ -181,6 +185,10 @@ impl FakeDNSInner {
             }
         }
         return false;
+    }
+
+    fn set_filter(&mut self, f: Vec<String>) {
+        self.filter = f;
     }
 
     fn query_domain(&self, ip: u32) -> Option<String> {

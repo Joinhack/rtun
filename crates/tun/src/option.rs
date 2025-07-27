@@ -17,6 +17,7 @@ lazy_static! {
     pub static ref UPLINK_COPY_TIMEOUT: u64 = get_env_var_or("UPLINK_COPY_TIMEOUT", 10);
     pub static ref LINK_BUFFER_SIZE: usize = get_env_var_or("LINK_BUFFER_SIZE", 2);
     pub static ref UDP_SESSION_TIMEOUT: u64 = get_env_var_or("UDP_SESSION_TIMEOUT", 3);
+    pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
     pub static ref SOCKS5_ADDR: SocketAddr =
         get_env_var_or("SOCKS5_ADDR", "127.0.0.1:1086".parse().unwrap());
     pub static ref TUN_ADDRESS: Ipv4Addr =

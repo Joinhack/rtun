@@ -6,13 +6,14 @@ mod socks5;
 mod tcp;
 mod udp;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use futures::{SinkExt, StreamExt};
 use log::error;
 use std::env;
 use std::future::Future;
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use std::{io, pin::Pin};
+use std::{fs, io, pin::Pin};
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };
@@ -22,8 +23,8 @@ use netstack_lwip as netstack;
 use crate::cmd::{add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface};
 use crate::fakedns::FakeDNS;
 use crate::option::{
-    NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME, TUN_ADDRESS,
-    TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
+    GFW_RULE_PATH, NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME,
+    TUN_ADDRESS, TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
 };
 use crate::tcp::TcpHandle;
 use crate::udp::UdpHandle;
@@ -118,6 +119,20 @@ impl Tun {
         Self { device }
     }
 
+    fn parse_rules() -> Result<Vec<String>> {
+        let file_path = &*GFW_RULE_PATH;
+        if !fs::exists(file_path)? {
+            bail!("file {file_path} is not exits.");
+        }
+        let rule_file = std::fs::OpenOptions::new().read(true).open(file_path)?;
+        let reader = BufReader::new(rule_file);
+        let lines: Vec<String> = reader
+            .lines()
+            .map(|line| line.map(|s| s.trim().to_string()))
+            .collect::<Result<_, _>>()?;
+        Ok(lines)
+    }
+
     pub async fn run(self) -> Result<()> {
         let destination = match self.device.destination() {
             Ok(a) => a,
@@ -188,9 +203,7 @@ impl Tun {
         });
         futs.push(tun_stream_fut);
         let fake_dns = FakeDNS::new()?;
-        fake_dns.add_filter("www.163.com").await;
-        fake_dns.add_filter("ifconfig.me").await;
-        fake_dns.add_filter("github.com").await;
+        fake_dns.set_filter(Self::parse_rules()?).await;
         let fake_dns = Arc::new(fake_dns);
         let fake_dns_cl = fake_dns.clone();
         let tcp_listener_fut = Box::pin(async move {
