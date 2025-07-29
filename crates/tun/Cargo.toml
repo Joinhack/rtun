@@ -22,3 +22,4 @@ anyhow = { workspace = true }
 futures = { workspace = true }
 socket2 = { workspace = true }
 trust-dns-proto = { workspace = true }
+if-watch = { workspace = true, features = ["tokio"] }

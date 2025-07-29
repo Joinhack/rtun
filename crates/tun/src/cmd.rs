@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{io::BufRead, process::Command};
+use std::{io::BufRead, net::IpAddr, process::Command};
 
 pub fn get_default_gw_iface() -> Result<(String, String)> {
     let out = Command::new("route").args(&["-n", "get", "1"]).output()?;
@@ -17,6 +17,14 @@ pub fn get_default_gw_iface() -> Result<(String, String)> {
         }
     }
     Ok((gw, iface))
+}
+
+pub fn get_if_addr(ifc: &str) -> Result<IpAddr> {
+    let out = Command::new("ipconfig")
+        .args(&["getifaddr", ifc])
+        .output()?;
+    let ip = String::from_utf8_lossy(&out.stdout.trim_ascii()).to_string();
+    Ok(ip.parse()?)
 }
 
 pub fn delete_default_ipv4_route(ifscope: Option<&str>) -> Result<()> {

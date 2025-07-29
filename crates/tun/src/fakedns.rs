@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use log::debug;
+use log::trace;
 use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
@@ -105,26 +105,24 @@ impl FakeDNSInner {
         let query_msg = match Message::from_vec(&query_vec) {
             Ok(msg) => msg,
             Err(_) => {
-                debug!("invalid dns packet.");
+                trace!("invalid dns packet.");
                 return Ok(DNSProcessResult::Upstream);
             }
         };
 
         if query_msg.queries().is_empty() {
-            debug!("dns query is empty.");
-            return Ok(DNSProcessResult::Upstream);
+            bail!("dns query is empty.");
         }
         let query = &query_msg.queries()[0];
 
         if query.query_class() != DNSClass::IN {
-            debug!("unsupport query class {}", query.query_class());
-            return Ok(DNSProcessResult::Upstream);
+            bail!("unsupport query class {}", query.query_class());
         }
-        match query.query_type() {
+        let qtype = query.query_type();
+        match qtype {
             RecordType::A | RecordType::AAAA | RecordType::HTTPS => (),
             _ => {
-                debug!("unsupport query type");
-                return Ok(DNSProcessResult::Upstream);
+                bail!("unsupport query type {qtype}");
             }
         };
 

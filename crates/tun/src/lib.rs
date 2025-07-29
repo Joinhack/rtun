@@ -7,12 +7,17 @@ mod tcp;
 mod udp;
 
 use anyhow::{Result, bail};
+use futures::stream::{AbortHandle, Abortable};
 use futures::{SinkExt, StreamExt};
+use if_watch::IfEvent;
+use if_watch::tokio::IfWatcher;
 use log::error;
 use std::env;
 use std::future::Future;
 use std::io::{BufRead, BufReader};
+use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, io, pin::Pin};
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
@@ -20,7 +25,9 @@ use tun::{
 
 use netstack_lwip as netstack;
 
-use crate::cmd::{add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface};
+use crate::cmd::{
+    add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface, get_if_addr,
+};
 use crate::fakedns::FakeDNS;
 use crate::option::{
     GFW_RULE_PATH, NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME,
@@ -76,21 +83,25 @@ pub struct Tun {
     device: AsyncDevice,
 }
 
+#[derive(Debug)]
 struct PostTunSetup {
     gw: String,
     iface: String,
     default_gw: String,
     default_iface: String,
+    default_iface_addr: IpAddr,
 }
 
 impl PostTunSetup {
     fn new(gw: String, iface: String) -> Result<Self> {
         let (default_gw, default_iface) = get_default_gw_iface()?;
+        let default_iface_addr = get_if_addr(&default_iface)?;
         Ok(Self {
             gw,
             iface,
             default_gw,
             default_iface,
+            default_iface_addr,
         })
     }
 
@@ -105,12 +116,6 @@ impl PostTunSetup {
         delete_default_ipv4_route(Some(&self.default_iface))?;
         add_default_ipv4_route(&self.default_gw, &self.default_iface, true)?;
         Ok(())
-    }
-}
-
-impl Drop for PostTunSetup {
-    fn drop(&mut self) {
-        self.unsetup().unwrap();
     }
 }
 
@@ -160,6 +165,48 @@ impl Tun {
                 );
             }
         }
+
+        let ip_watcher = IfWatcher::new()?;
+        let (abort_handle, abort_reg) = AbortHandle::new_pair();
+        let mut ip_abort_watcher = Abortable::new(ip_watcher, abort_reg);
+        let monitor_joinable = tokio::spawn(async move {
+            let mut tun_setup = tun_setup;
+            let mut default_ipaddr = tun_setup.default_iface_addr;
+            let mut default_iface_up = true;
+            while let Some(Ok(event)) = ip_abort_watcher.next().await {
+                match event {
+                    IfEvent::Up(_) => {
+                        if !default_iface_up {
+                            match get_if_addr(&tun_setup.default_iface) {
+                                Ok(ip) => {
+                                    if ip != default_ipaddr {
+                                        tokio::time::sleep(Duration::from_millis(500)).await;
+                                        if let Ok(rt) = PostTunSetup::new(
+                                            tun_setup.gw.clone(),
+                                            tun_setup.iface.clone(),
+                                        ) {
+                                            default_ipaddr = ip;
+                                            default_iface_up = true;
+                                            tun_setup = rt;
+                                            if let Err(e) = tun_setup.setup() {
+                                                error!("error {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(_) => (),
+                            };
+                        }
+                    }
+                    IfEvent::Down(ip_net) => {
+                        if default_ipaddr == ip_net.addr() {
+                            default_iface_up = false;
+                        }
+                    }
+                }
+            }
+            let _ = tun_setup.unsetup();
+        });
 
         let (stack, mut tcp_listner, udp_socket) =
             netstack::NetStack::with_buffer_size(*NETSTACK_BUFF_SIZE, *NETSTACK_UDP_BUFF_SIZE)?;
@@ -226,6 +273,8 @@ impl Tun {
         }));
 
         futures::future::select_all(futs).await;
+        abort_handle.abort();
+        let _ = monitor_joinable.await;
         Ok(())
     }
 }

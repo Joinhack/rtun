@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use log::{debug, error};
+use log::{debug, error, trace};
 use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
@@ -100,9 +100,10 @@ impl UdpHandle {
                     Ok(DNSProcessResult::Upstream) => (),
                     Ok(DNSProcessResult::Response(resp)) => {
                         udp_tx.send_to(&resp, &d_addr, &s_addr)?;
+                        continue;
                     }
                     Err(e) => {
-                        error!("error process dns: {e}");
+                        trace!("error process dns: {e}");
                         continue;
                     }
                 }
