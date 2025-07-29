@@ -3,6 +3,7 @@ use log::{debug, error, trace};
 use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, io};
@@ -69,7 +70,7 @@ impl UdpHandle {
              s_addr: SocketAddr,
              udp_tx_cl: Arc<SendHalf>,
              proxy_udp: Arc<TokioUdpSocket>| async move {
-                let mut buf = vec![0u8; 65535];
+                let mut buf = vec![0u8; 1500];
                 let s_addr = s_addr;
                 loop {
                     let timeout = time::timeout(
@@ -86,7 +87,7 @@ impl UdpHandle {
                         }
                         Err(_) => {
                             let mut sesses = sessions.lock().await;
-                            debug!("s_addr: {} removed", s_addr);
+                            debug!("s_addr: {} removed, sessions: {}", s_addr, sesses.len());
                             sesses.remove(&s_addr);
                             return;
                         }
@@ -109,6 +110,7 @@ impl UdpHandle {
                 }
             }
             let mut sesses = sessions.lock().await;
+            let s_len = sesses.len();
             let entry = sesses.entry(s_addr);
             match entry {
                 Entry::Occupied(mut entry) => {
@@ -118,6 +120,10 @@ impl UdpHandle {
                     }
                 }
                 Entry::Vacant(vacant) => {
+                    debug!(
+                        "add seession s_addr: {s_addr} d_addr: {d_addr}, session: {}",
+                        s_len
+                    );
                     let (tx, rx) = channel::<UdpPkg>(*UDP_RECV_CH_SIZE);
                     tx.send(UdpPkg { payload: data }).await.unwrap();
                     let proxy_udp = create_outbound_udp_socket(&d_addr).unwrap();

@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
-use log::trace;
+use log::{debug, trace};
 use std::{
     collections::HashMap,
+    fs,
+    io::{BufRead, BufReader},
     net::{Ipv4Addr, SocketAddr},
 };
 use tokio::sync::RwLock;
@@ -9,6 +11,8 @@ use trust_dns_proto::{
     op::{Message, MessageType, OpCode, ResponseCode},
     rr::{DNSClass, RData, RecordType, rdata::A, resource::Record},
 };
+
+use crate::option::GFW_RULE_PATH;
 
 pub struct FakeDNS(RwLock<FakeDNSInner>);
 
@@ -128,7 +132,10 @@ impl FakeDNSInner {
 
         let qname = query.name();
         let raw_name = qname.to_ascii();
-        if !self.accept(&raw_name) {
+
+        let accept = self.accept(&raw_name);
+        debug!("domain:{raw_name} accept:{accept}");
+        if !accept {
             return Ok(DNSProcessResult::Upstream);
         }
         let domain = if qname.is_fqdn() {
@@ -197,5 +204,32 @@ impl FakeDNSInner {
         self.domain_2_ip
             .get(domain)
             .map(|u| Ipv4Addr::from_bits(*u))
+    }
+}
+
+pub fn parse_rules() -> Result<Vec<String>> {
+    let file_path = &*GFW_RULE_PATH;
+    if !fs::exists(file_path)? {
+        bail!("file {file_path} is not exits.");
+    }
+    let rule_file = std::fs::OpenOptions::new().read(true).open(file_path)?;
+    let reader = BufReader::new(rule_file);
+    let lines: Vec<String> = reader
+        .lines()
+        .map(|line| line.map(|s| s.trim().to_string()))
+        .collect::<Result<_, _>>()?;
+    Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_contain() {
+        let mut fake_dns = FakeDNSInner::new().unwrap();
+        fake_dns.set_filter(parse_rules().unwrap());
+        assert!(!fake_dns.accept("www.163.com"));
+        assert!(!fake_dns.accept("ltstysj.gtimg.com"));
+        assert!(fake_dns.accept("google.com"));
     }
 }

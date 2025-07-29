@@ -688,7 +688,6 @@ docs.new
 duck.com
 feedburner.com
 firebaseio.com
-g.co
 gcr.io
 get.app
 get.dev

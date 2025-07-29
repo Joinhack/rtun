@@ -14,7 +14,6 @@ use if_watch::tokio::IfWatcher;
 use log::error;
 use std::env;
 use std::future::Future;
-use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,7 +27,7 @@ use netstack_lwip as netstack;
 use crate::cmd::{
     add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface, get_if_addr,
 };
-use crate::fakedns::FakeDNS;
+use crate::fakedns::{FakeDNS, parse_rules};
 use crate::option::{
     GFW_RULE_PATH, NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME,
     TUN_ADDRESS, TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
@@ -122,20 +121,6 @@ impl PostTunSetup {
 impl Tun {
     pub fn new(device: AsyncDevice) -> Self {
         Self { device }
-    }
-
-    fn parse_rules() -> Result<Vec<String>> {
-        let file_path = &*GFW_RULE_PATH;
-        if !fs::exists(file_path)? {
-            bail!("file {file_path} is not exits.");
-        }
-        let rule_file = std::fs::OpenOptions::new().read(true).open(file_path)?;
-        let reader = BufReader::new(rule_file);
-        let lines: Vec<String> = reader
-            .lines()
-            .map(|line| line.map(|s| s.trim().to_string()))
-            .collect::<Result<_, _>>()?;
-        Ok(lines)
     }
 
     pub async fn run(self) -> Result<()> {
@@ -250,7 +235,7 @@ impl Tun {
         });
         futs.push(tun_stream_fut);
         let fake_dns = FakeDNS::new()?;
-        fake_dns.set_filter(Self::parse_rules()?).await;
+        fake_dns.set_filter(parse_rules()?).await;
         let fake_dns = Arc::new(fake_dns);
         let fake_dns_cl = fake_dns.clone();
         let tcp_listener_fut = Box::pin(async move {
