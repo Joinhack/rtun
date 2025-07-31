@@ -16,10 +16,10 @@ use crate::option::GFW_RULE_PATH;
 
 pub struct FakeDNS(RwLock<FakeDNSInner>);
 
-pub enum DNSProcessResult {
+pub enum FakeDnsProcessed {
     Response(Vec<u8>),
     // upstream dns will continue process packet.
-    Upstream,
+    Upstream(Message),
 }
 
 impl FakeDNS {
@@ -27,7 +27,7 @@ impl FakeDNS {
         Ok(Self(RwLock::new(FakeDNSInner::new()?)))
     }
 
-    pub async fn process_dns_packet(&self, query_vec: &[u8]) -> Result<DNSProcessResult> {
+    pub async fn process_dns_packet(&self, query_vec: &[u8]) -> Result<FakeDnsProcessed> {
         self.0.write().await.process_dns_packet(query_vec)
     }
 
@@ -105,28 +105,28 @@ impl FakeDNSInner {
         self.ip_2_domain.contains_key(&addr)
     }
 
-    fn process_dns_packet(&mut self, query_vec: &[u8]) -> Result<DNSProcessResult> {
+    fn process_dns_packet(&mut self, query_vec: &[u8]) -> Result<FakeDnsProcessed> {
         let query_msg = match Message::from_vec(&query_vec) {
             Ok(msg) => msg,
             Err(_) => {
-                trace!("invalid dns packet.");
-                return Ok(DNSProcessResult::Upstream);
+                bail!("invalid dns packet.");
             }
         };
-
         if query_msg.queries().is_empty() {
             bail!("dns query is empty.");
         }
         let query = &query_msg.queries()[0];
 
         if query.query_class() != DNSClass::IN {
-            bail!("unsupport query class {}", query.query_class());
+            trace!("unsupport query class {}", query.query_class());
+            return Ok(FakeDnsProcessed::Upstream(query_msg));
         }
         let qtype = query.query_type();
         match qtype {
             RecordType::A | RecordType::AAAA | RecordType::HTTPS => (),
             _ => {
-                bail!("unsupport query type {qtype}");
+                trace!("unsupport query type {qtype}");
+                return Ok(FakeDnsProcessed::Upstream(query_msg));
             }
         };
 
@@ -136,7 +136,7 @@ impl FakeDNSInner {
         let accept = self.accept(&raw_name);
         debug!("domain:{raw_name} accept:{accept}");
         if !accept {
-            return Ok(DNSProcessResult::Upstream);
+            return Ok(FakeDnsProcessed::Upstream(query_msg));
         }
         let domain = if qname.is_fqdn() {
             raw_name[..raw_name.len() - 1].to_string()
@@ -166,7 +166,7 @@ impl FakeDNSInner {
                 .set_data(Some(RData::A(A(ipaddr))));
             resp.add_answer(ans);
         }
-        Ok(DNSProcessResult::Response(resp.to_vec()?))
+        Ok(FakeDnsProcessed::Response(resp.to_vec()?))
     }
 
     fn alloc_fake_ip(&mut self, domain: &str) -> Result<Ipv4Addr> {

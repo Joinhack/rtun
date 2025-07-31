@@ -2,6 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use crate::fakedns::FakeDNS;
@@ -25,11 +26,15 @@ impl Into<Box<dyn CopyTrait>> for tokio::net::TcpStream {
 
 pub struct TcpHandle {
     fake_dns: Arc<FakeDNS>,
+    sessions: Arc<AtomicU32>,
 }
 
 impl TcpHandle {
     pub fn new(fake_dns: Arc<FakeDNS>) -> Self {
-        TcpHandle { fake_dns }
+        TcpHandle {
+            fake_dns,
+            sessions: Arc::new(AtomicU32::new(0)),
+        }
     }
     /// hanlde tcp packet.
     pub async fn handle_tcp_stream(
@@ -39,6 +44,7 @@ impl TcpHandle {
         mut tcp_stream: Pin<Box<TcpStream>>,
     ) -> io::Result<()> {
         let fake_dns = self.fake_dns.clone();
+        let sessions = self.sessions.clone();
         tokio::spawn(async move {
             info!("start tcp: {src_addr} <-> {dst_addr}");
             let r_socket = match create_outbound_tcp_socket(&dst_addr) {
@@ -83,8 +89,8 @@ impl TcpHandle {
                     return;
                 }
             };
-
-            debug!("created TCP connection for {} <-> {}", src_addr, dst_addr);
+            let count = sessions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            debug!("created TCP connection for {src_addr} <-> {dst_addr}, count: {count}");
             if let Err(e) = copy_bidirectional_with_timeout(
                 &mut tcp_stream,
                 &mut proxy_conn,
@@ -94,8 +100,10 @@ impl TcpHandle {
             )
             .await
             {
-                error!("connect copy error: {}", e);
+                error!(" Tcp copy error, {e}");
             }
+            let count = sessions.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            debug!(" Tcp disconnect  {src_addr} <-> {dst_addr} count: {count}");
         });
 
         Ok(())

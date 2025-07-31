@@ -1,4 +1,5 @@
 mod cmd;
+mod dns_proxy;
 mod fakedns;
 mod net;
 mod option;
@@ -6,7 +7,7 @@ mod socks5;
 mod tcp;
 mod udp;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use futures::stream::{AbortHandle, Abortable};
 use futures::{SinkExt, StreamExt};
 use if_watch::IfEvent;
@@ -17,7 +18,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{fs, io, pin::Pin};
+use std::{io, pin::Pin};
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };

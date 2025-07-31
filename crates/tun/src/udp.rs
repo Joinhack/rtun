@@ -1,9 +1,8 @@
 use futures::StreamExt;
-use log::{debug, error, trace};
+use log::{debug, error};
 use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
-use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, io};
@@ -14,7 +13,8 @@ use tokio::time;
 
 use std::{net::SocketAddr, pin::Pin};
 
-use crate::fakedns::{DNSProcessResult, FakeDNS};
+use crate::dns_proxy::DnsProxy;
+use crate::fakedns::{FakeDNS, FakeDnsProcessed};
 use crate::option::UDP_SESSION_TIMEOUT;
 use crate::{net::create_outbound_udp_socket, option::UDP_RECV_CH_SIZE};
 
@@ -26,6 +26,7 @@ type SessionMap = Arc<Mutex<HashMap<SocketAddr, Sender<UdpPkg>>>>;
 
 pub struct UdpHandle {
     sessions: SessionMap,
+
     fake_dns: Arc<FakeDNS>,
 }
 
@@ -42,6 +43,7 @@ impl UdpHandle {
 
         let sessions = &self.sessions;
         let udp_tx = Arc::new(udp_tx);
+        let mut dns_proxy = DnsProxy::new(udp_tx.clone());
 
         // recv from local tunnel packet then send them to remote.
         let forward_to_outgoing =
@@ -98,13 +100,19 @@ impl UdpHandle {
             if d_addr.port() == 53 {
                 match self.fake_dns.process_dns_packet(&data).await {
                     // use upstream to resolve domain.
-                    Ok(DNSProcessResult::Upstream) => (),
-                    Ok(DNSProcessResult::Response(resp)) => {
+                    Ok(FakeDnsProcessed::Upstream(msg)) => {
+                        if let Err(e) = dns_proxy.send(s_addr, d_addr, msg).await {
+                            error!("dns proxy send error {}", e);
+                        }
+                        continue;
+                    }
+                    // use fake ip as response.
+                    Ok(FakeDnsProcessed::Response(resp)) => {
                         udp_tx.send_to(&resp, &d_addr, &s_addr)?;
                         continue;
                     }
                     Err(e) => {
-                        trace!("error process dns: {e}");
+                        error!("error process dns: {e}");
                         continue;
                     }
                 }
