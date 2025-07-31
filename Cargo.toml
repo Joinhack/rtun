@@ -26,6 +26,7 @@ tokio = { version = "1.45.1", features = [
     "macros",
     "signal",
     "sync",
+    "tracing",
     "rt-multi-thread",
 ] }
 ipnet = "2.11.0"
@@ -47,7 +48,6 @@ anyhow = "1.0.98"
 socket2 = "0.5.10"
 trust-dns-proto = "0.23.2"
 if-watch = "3.2.1"
-tokio-metrics = "0.4.3"
 
 [dependencies]
 tokio = { workspace = true }

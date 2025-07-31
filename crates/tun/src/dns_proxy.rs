@@ -285,7 +285,7 @@ impl DnsProxy {
             id: Arc::new(AtomicU16::new(1)),
             idx: 0,
             session_clear,
-            max_upstream: 8,
+            max_upstream: 3,
             tun_udp_sender,
             sessions,
         }

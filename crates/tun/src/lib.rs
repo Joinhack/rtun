@@ -12,13 +12,14 @@ use futures::stream::{AbortHandle, Abortable};
 use futures::{SinkExt, StreamExt};
 use if_watch::IfEvent;
 use if_watch::tokio::IfWatcher;
-use log::error;
+use log::{error, info};
 use std::env;
 use std::future::Future;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, pin::Pin};
+use tokio::time::sleep;
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };
@@ -30,8 +31,8 @@ use crate::cmd::{
 };
 use crate::fakedns::{FakeDNS, parse_rules};
 use crate::option::{
-    GFW_RULE_PATH, NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME,
-    TUN_ADDRESS, TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
+    NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME, TUN_ADDRESS,
+    TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
 };
 use crate::tcp::TcpHandle;
 use crate::udp::UdpHandle;
@@ -196,7 +197,7 @@ impl Tun {
 
         let (stack, mut tcp_listner, udp_socket) =
             netstack::NetStack::with_buffer_size(*NETSTACK_BUFF_SIZE, *NETSTACK_UDP_BUFF_SIZE)?;
-        let mut futs: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
+        let mut futs: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
         let (mut stack_sink, mut stack_stream) = stack.split();
         let dev_frame = self.device.into_framed();
         let (mut tun_sink, mut tun_stream) = dev_frame.split();

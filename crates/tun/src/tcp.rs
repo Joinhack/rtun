@@ -26,15 +26,11 @@ impl Into<Box<dyn CopyTrait>> for tokio::net::TcpStream {
 
 pub struct TcpHandle {
     fake_dns: Arc<FakeDNS>,
-    sessions: Arc<AtomicU32>,
 }
 
 impl TcpHandle {
     pub fn new(fake_dns: Arc<FakeDNS>) -> Self {
-        TcpHandle {
-            fake_dns,
-            sessions: Arc::new(AtomicU32::new(0)),
-        }
+        TcpHandle { fake_dns }
     }
     /// hanlde tcp packet.
     pub async fn handle_tcp_stream(
@@ -44,7 +40,6 @@ impl TcpHandle {
         mut tcp_stream: Pin<Box<TcpStream>>,
     ) -> io::Result<()> {
         let fake_dns = self.fake_dns.clone();
-        let sessions = self.sessions.clone();
         tokio::spawn(async move {
             info!("start tcp: {src_addr} <-> {dst_addr}");
             let r_socket = match create_outbound_tcp_socket(&dst_addr) {
@@ -89,8 +84,7 @@ impl TcpHandle {
                     return;
                 }
             };
-            let count = sessions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            debug!("created TCP connection for {src_addr} <-> {dst_addr}, count: {count}");
+            debug!("created TCP connection for {src_addr} <-> {dst_addr}");
             if let Err(e) = copy_bidirectional_with_timeout(
                 &mut tcp_stream,
                 &mut proxy_conn,
@@ -102,8 +96,7 @@ impl TcpHandle {
             {
                 error!(" Tcp copy error, {e}");
             }
-            let count = sessions.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            debug!(" Tcp disconnect  {src_addr} <-> {dst_addr} count: {count}");
+            debug!(" Tcp disconnect  {src_addr} <-> {dst_addr}");
         });
 
         Ok(())
