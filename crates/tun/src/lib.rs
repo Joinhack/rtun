@@ -12,14 +12,13 @@ use futures::stream::{AbortHandle, Abortable};
 use futures::{SinkExt, StreamExt};
 use if_watch::IfEvent;
 use if_watch::tokio::IfWatcher;
-use log::{error, info};
+use log::error;
 use std::env;
 use std::future::Future;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, pin::Pin};
-use tokio::time::sleep;
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };

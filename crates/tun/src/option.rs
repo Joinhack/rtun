@@ -19,6 +19,12 @@ lazy_static! {
     pub static ref UDP_SESSION_TIMEOUT: u64 = get_env_var_or("UDP_SESSION_TIMEOUT", 30);
     pub static ref DNS_SESSION_TIMEOUT: u64 = get_env_var_or("DNS_SESSION_TIMEOUT", 5);
     pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
+    pub static ref NETSTACK_OUTPUT_CHANNEL_SIZE: usize =
+        get_env_var_or("NETSTACK_OUTPUT_CHANNEL_SIZE", 512);
+    pub static ref NETSTACK_TCP_UPLINK_CHANNEL_SIZE: usize =
+        get_env_var_or("NETSTACK_TCP_UPLINK_CHANNEL_SIZE", 256);
+    pub static ref NETSTACK_UDP_UPLINK_CHANNEL_SIZE: usize =
+        get_env_var_or("NETSTACK_UDP_UPLINK_CHANNEL_SIZE", 256);
     pub static ref SOCKS5_ADDR: SocketAddr =
         get_env_var_or("SOCKS5_ADDR", "127.0.0.1:1086".parse().unwrap());
     pub static ref TUN_ADDRESS: Ipv4Addr =

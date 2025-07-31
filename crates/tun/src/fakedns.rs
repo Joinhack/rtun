@@ -22,6 +22,7 @@ pub enum FakeDnsProcessed {
     Upstream(Message),
 }
 
+#[allow(dead_code)]
 impl FakeDNS {
     pub fn new() -> Result<Self> {
         Ok(Self(RwLock::new(FakeDNSInner::new()?)))
