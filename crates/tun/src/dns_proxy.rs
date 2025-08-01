@@ -45,6 +45,8 @@ enum SendState {
     SessionsLock(LockType),
 }
 
+/// The Send Future receive the dns message from tunnel thought `rx`,
+/// after reset the message id as session id, send the packet to distination address
 struct SendFut {
     state: SendState,
     session: Option<DnsSession>,
@@ -116,7 +118,6 @@ impl Future for SendFut {
                     *state = SendState::Send(v);
                 }
                 // Sends the DNS message after replacing its message ID with the maintained session ID.
-                //
                 SendState::Send(msg) => {
                     let sess = session.as_ref().unwrap();
                     match udp_socket.poll_send_to(cx, &msg[*sendn..msg.len()], sess.peer.dest) {
@@ -156,6 +157,8 @@ enum RecvState {
     SessionsLock(LockType),
 }
 
+/// The Receive Future is receive from udp socket `udp_socket`, find the session by dns message id
+/// the send the dns message packet back to tunnel thought `tun_udp_sender`
 struct RecvFut {
     state: RecvState,
     sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,

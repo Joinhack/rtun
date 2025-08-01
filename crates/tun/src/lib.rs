@@ -105,6 +105,7 @@ impl PostTunSetup {
         })
     }
 
+    /// setup the route
     fn setup(&self) -> Result<()> {
         delete_default_ipv4_route(None)?;
         add_default_ipv4_route(&self.gw, &self.iface, true)?;
@@ -155,6 +156,7 @@ impl Tun {
         let ip_watcher = IfWatcher::new()?;
         let (abort_handle, abort_reg) = AbortHandle::new_pair();
         let mut ip_abort_watcher = Abortable::new(ip_watcher, abort_reg);
+        // ip monitor if the ip changed, reset the route with command.
         let monitor_joinable = tokio::spawn(async move {
             let mut tun_setup = tun_setup;
             let mut default_ipaddr = tun_setup.default_iface_addr;
@@ -193,7 +195,7 @@ impl Tun {
             }
             let _ = tun_setup.unsetup();
         });
-
+        // initialize the tcp/ip stack, get netstack,tcp,udp stack
         let (stack, mut tcp_listner, udp_socket) =
             netstack::NetStack::with_buffer_size(*NETSTACK_BUFF_SIZE, *NETSTACK_UDP_BUFF_SIZE)?;
         let mut futs: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
@@ -218,6 +220,7 @@ impl Tun {
             }
         });
         futs.push(stack_stream_fut);
+        // read from the tunnel, send the packet from tunnel to the tcp/ip stack.
         let tun_stream_fut = Box::pin(async move {
             while let Some(pkg) = tun_stream.next().await {
                 match pkg {
