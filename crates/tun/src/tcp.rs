@@ -12,8 +12,9 @@ use crate::option::{
     UPLINK_COPY_TIMEOUT,
 };
 use crate::socks5::{self, Socks5Addr};
+use crate::stack::tcp::TcpStream;
 use log::{debug, error, info};
-use netstack_lwip::TcpStream;
+
 use tokio::time;
 
 impl CopyTrait for tokio::net::TcpStream {}
@@ -41,7 +42,7 @@ impl TcpHandle {
         &self,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
-        mut tcp_stream: Pin<Box<TcpStream>>,
+        mut tcp_stream: TcpStream,
     ) -> io::Result<()> {
         let fake_dns = self.fake_dns.clone();
         let counter = self.counter.clone();

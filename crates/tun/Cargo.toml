@@ -16,10 +16,23 @@ byte_string = { workspace = true }
 ipnet = { workspace = true }
 libc = { workspace = true }
 tun = { workspace = true, features = ["async"] }
-netstack-lwip = { workspace = true }
 lazy_static = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 socket2 = { workspace = true }
+tokio-util = { workspace = true }
+etherparse = { workspace = true }
+smoltcp = { workspace = true, features = [
+    "std",
+    "log",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv4-fragmentation",
+    "proto-ipv6",
+    "socket-icmp",
+    "socket-udp",
+    "socket-tcp",
+    "socket-tcp-cubic",
+] }
 trust-dns-proto = { workspace = true }
 if-watch = { workspace = true, features = ["tokio"] }

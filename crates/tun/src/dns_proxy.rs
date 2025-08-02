@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 
-use futures::FutureExt;
+use crate::stack::udp::UdpHalfWrite;
+use futures::{FutureExt, SinkExt};
 use log::{error, trace};
-use netstack_lwip::udp::SendHalf;
 use std::{
     collections::HashMap,
     io,
@@ -163,7 +163,7 @@ struct RecvFut {
     state: RecvState,
     sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,
     udp_socket: Arc<UdpSocket>,
-    tun_udp_sender: Arc<SendHalf>,
+    tun_udp_sender: UdpHalfWrite,
     msg: Option<Message>,
     buf: Vec<u8>,
 }
@@ -171,7 +171,7 @@ struct RecvFut {
 impl RecvFut {
     fn new(
         udp_socket: Arc<UdpSocket>,
-        tun_udp_sender: Arc<SendHalf>,
+        tun_udp_sender: UdpHalfWrite,
         sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,
     ) -> Self {
         Self {
@@ -226,14 +226,18 @@ impl Future for RecvFut {
                     Poll::Ready(mut sessions) => {
                         let mut msg = msg.take().unwrap();
                         let msg_id = msg.id();
+                        match ready!(tun_udp_sender.poll_ready_unpin(cx)) {
+                            Ok(_) => (),
+                            Err(e) => {
+                                return Poll::Ready(Err(anyhow!("channel closed, {e}")));
+                            }
+                        }
                         if let Some(session) = sessions.remove(&msg_id) {
                             msg.set_id(session.old_id);
                             match msg.to_vec() {
-                                Ok(data) => {
-                                    tun_udp_sender
-                                        .send_to(&data, &session.peer.dest, &session.peer.src)
-                                        .unwrap();
-                                }
+                                Ok(data) => tun_udp_sender
+                                    .start_send_unpin((data, session.peer.dest, session.peer.src))
+                                    .unwrap(),
                                 Err(e) => {
                                     error!("message to bytes error {e}");
                                 }
@@ -255,12 +259,12 @@ pub struct DnsProxy {
     session_clear: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     idx: usize,
     max_upstream: u8,
-    tun_udp_sender: Arc<SendHalf>,
+    tun_udp_sender: UdpHalfWrite,
     sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,
 }
 
 impl DnsProxy {
-    pub fn new(tun_udp_sender: Arc<SendHalf>) -> Self {
+    pub fn new(tun_udp_sender: UdpHalfWrite) -> Self {
         let sessions: Arc<Mutex<HashMap<u16, DnsSession>>> = Default::default();
         let sessions_clone = sessions.clone();
         let session_clear = Some(

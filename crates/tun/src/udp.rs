@@ -1,7 +1,5 @@
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use log::{debug, error};
-use netstack_lwip::UdpSocket;
-use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,11 +9,12 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time;
 
-use std::{net::SocketAddr, pin::Pin};
+use std::net::SocketAddr;
 
 use crate::dns_proxy::DnsProxy;
 use crate::fakedns::{FakeDNS, FakeDnsProcessed};
 use crate::option::UDP_SESSION_TIMEOUT;
+use crate::stack::udp::{UdpHalfWrite, UdpStack};
 use crate::{net::create_outbound_udp_socket, option::UDP_RECV_CH_SIZE};
 
 struct UdpPkg {
@@ -38,11 +37,11 @@ impl UdpHandle {
         }
     }
 
-    pub async fn handle_udp_socket(&self, udp_socket: Pin<Box<UdpSocket>>) -> io::Result<()> {
+    pub async fn handle_udp_socket(&self, udp_socket: UdpStack) -> io::Result<()> {
         let (udp_tx, mut udp_rx) = udp_socket.split();
 
         let sessions = &self.sessions;
-        let udp_tx = Arc::new(udp_tx);
+        let mut udp_tx = udp_tx;
         let mut dns_proxy = DnsProxy::new(udp_tx.clone());
 
         // recv from local tunnel packet then send them to remote.
@@ -70,7 +69,7 @@ impl UdpHandle {
         let forward_to_incoming =
             |sessions: SessionMap,
              s_addr: SocketAddr,
-             udp_tx_cl: Arc<SendHalf>,
+             mut udp_tx_cl: UdpHalfWrite,
              proxy_udp: Arc<TokioUdpSocket>| async move {
                 let mut buf = vec![0u8; 1500];
                 let s_addr = s_addr;
@@ -81,7 +80,13 @@ impl UdpHandle {
                     );
                     match timeout.await {
                         Ok(Ok((n, dest_addr))) => {
-                            udp_tx_cl.send_to(&buf[..n], &dest_addr, &s_addr).unwrap();
+                            match udp_tx_cl.send((buf[..n].to_vec(), dest_addr, s_addr)).await {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    error!("channel is closed, {e}");
+                                    return;
+                                }
+                            }
                         }
                         Ok(Err(e)) => {
                             error!("proxy recv error: {}", e);
@@ -108,7 +113,7 @@ impl UdpHandle {
                     }
                     // use fake ip as response.
                     Ok(FakeDnsProcessed::Response(resp)) => {
-                        udp_tx.send_to(&resp, &d_addr, &s_addr)?;
+                        udp_tx.send((resp, d_addr, s_addr)).await?;
                         continue;
                     }
                     Err(e) => {

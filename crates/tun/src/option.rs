@@ -18,6 +18,12 @@ lazy_static! {
     pub static ref LINK_BUFFER_SIZE: usize = get_env_var_or("LINK_BUFFER_SIZE", 2);
     pub static ref UDP_SESSION_TIMEOUT: u64 = get_env_var_or("UDP_SESSION_TIMEOUT", 30);
     pub static ref DNS_SESSION_TIMEOUT: u64 = get_env_var_or("DNS_SESSION_TIMEOUT", 5);
+    pub static ref TCP_KEEPALIVE: u64 = get_env_var_or("TCP_KEEP_ALIVE", 15);
+    pub static ref TCP_STACK_CHANNEL: usize = get_env_var_or("TCP_STACK_CHANNEL", 256);
+    pub static ref UDP_STACK_CHANNEL: usize = get_env_var_or("UDP_STACK_CHANNEL", 256);
+    pub static ref ICMP_STACK_CHANNEL: usize = get_env_var_or("ICMP_STACK_CHANNEL", 64);
+    pub static ref STACK_CHANNEL: usize = get_env_var_or("STACK_CHANNEL", 256);
+    pub static ref LISNTER_CHANNEL: usize = get_env_var_or("LISNTER_CHANNEL", 128);
     pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
     pub static ref NETSTACK_OUTPUT_CHANNEL_SIZE: usize =
         get_env_var_or("NETSTACK_OUTPUT_CHANNEL_SIZE", 512);

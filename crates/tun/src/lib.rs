@@ -4,12 +4,13 @@ mod fakedns;
 mod net;
 mod option;
 mod socks5;
+mod stack;
 mod tcp;
 mod udp;
 
 use anyhow::Result;
 use futures::stream::{AbortHandle, Abortable};
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use if_watch::IfEvent;
 use if_watch::tokio::IfWatcher;
 use log::error;
@@ -23,15 +24,12 @@ use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };
 
-use netstack_lwip as netstack;
-
 use crate::cmd::{
     add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface, get_if_addr,
 };
 use crate::fakedns::{FakeDNS, parse_rules};
 use crate::option::{
-    NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME, TUN_ADDRESS,
-    TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
+    OUTBOUND_INTERFACES_NAME, TUN_ADDRESS, TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
 };
 use crate::tcp::TcpHandle;
 use crate::udp::UdpHandle;
@@ -196,27 +194,25 @@ impl Tun {
             let _ = tun_setup.unsetup();
         });
         // initialize the tcp/ip stack, get netstack,tcp,udp stack
-        let (stack, mut tcp_listner, udp_socket) =
-            netstack::NetStack::with_buffer_size(*NETSTACK_BUFF_SIZE, *NETSTACK_UDP_BUFF_SIZE)?;
+        let (stack, tcp_listner, runner, udp_socket) = stack::StackBuidler::new().build();
+
         let mut futs: Vec<Pin<Box<dyn Future<Output = ()> + Send>>> = Vec::new();
+        futs.push(
+            async move {
+                runner.await;
+            }
+            .boxed(),
+        );
         let (mut stack_sink, mut stack_stream) = stack.split();
         let dev_frame = self.device.into_framed();
         let (mut tun_sink, mut tun_stream) = dev_frame.split();
 
         let stack_stream_fut = Box::pin(async move {
             while let Some(pkg) = stack_stream.next().await {
-                match pkg {
-                    Ok(pkg) => {
-                        if let Err(e) = tun_sink.send(pkg).await {
-                            error!("device send error :{}", e);
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        error!("stack stream next error :{}", e);
-                        return;
-                    }
-                };
+                if let Err(e) = tun_sink.send(pkg).await {
+                    error!("device send error :{}", e);
+                    return;
+                }
             }
         });
         futs.push(stack_stream_fut);
@@ -244,6 +240,7 @@ impl Tun {
         let fake_dns_cl = fake_dns.clone();
         let tcp_listener_fut = Box::pin(async move {
             let tcp_handle = TcpHandle::new(fake_dns_cl);
+            let mut tcp_listner = tcp_listner;
             while let Some((stream, local_addr, remote_addr)) = tcp_listner.next().await {
                 let _ = tcp_handle
                     .handle_tcp_stream(local_addr, remote_addr, stream)

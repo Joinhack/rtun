@@ -8,6 +8,9 @@ version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 
+[[bin]]
+name = "rustun"
+path = "src/main.rs"
 
 [workspace.package]
 authors = ["Join.G"]
@@ -19,7 +22,6 @@ edition = "2024"
 [workspace.dependencies]
 log = "0.4.27"
 futures-core = "0.3.31"
-netstack-lwip = { git = "https://github.com/Joinhack/netstack-lwip", tag = "v0.0.2" }
 tokio = { version = "1.45.1", features = [
     "net",
     "time",
@@ -48,6 +50,9 @@ anyhow = "1.0.98"
 socket2 = "0.5.10"
 trust-dns-proto = "0.23.2"
 if-watch = "3.2.1"
+smoltcp = "0.12"
+tokio-util = "0.7.15"
+etherparse = "0.18.2"
 
 [dependencies]
 tokio = { workspace = true }
