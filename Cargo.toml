@@ -8,13 +8,15 @@ version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 
+[[bin]]
+name = "rustun"
+path = "src/main.rs"
 
 [workspace.package]
 authors = ["Join.G"]
 homepage = "https://github.com/Joinhack/rtun"
 version = "0.1.0"
 edition = "2024"
-
 
 [workspace.dependencies]
 log = "0.4.27"
