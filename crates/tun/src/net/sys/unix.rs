@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, FromRawFd};
 use std::{io, time::Duration};
 
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::net::{TcpSocket, UdpSocket};
 
+use crate::option::{TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_TIMEOUT};
 use crate::{net::set_ip_bound_if, option::OUTBOUND_INTERFACES};
 
 pub fn create_outbound_udp_socket(addr: &SocketAddr) -> io::Result<UdpSocket> {
@@ -30,10 +30,11 @@ pub fn create_outbound_tcp_socket(addr: &SocketAddr) -> io::Result<TcpSocket> {
         set_ip_bound_if(&socket, addr, iface)?;
     }
     let keepalive = TcpKeepalive::new()
-        .with_time(Duration::from_secs(600))
-        .with_interval(Duration::from_secs(60));
+        .with_time(Duration::from_secs(*TCP_KEEPALIVE_TIMEOUT))
+        .with_interval(Duration::from_secs(*TCP_KEEPALIVE_INTERVAL));
     socket.set_keepalive(true)?;
     socket.set_tcp_keepalive(&keepalive)?;
-    let socket = unsafe { TcpSocket::from_raw_fd(socket.as_raw_fd()) };
+    let stream: std::net::TcpStream = socket.into();
+    let socket = TcpSocket::from_std_stream(stream);
     Ok(socket)
 }

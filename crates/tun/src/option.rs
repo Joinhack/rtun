@@ -18,6 +18,8 @@ lazy_static! {
     pub static ref LINK_BUFFER_SIZE: usize = get_env_var_or("LINK_BUFFER_SIZE", 2);
     pub static ref UDP_SESSION_TIMEOUT: u64 = get_env_var_or("UDP_SESSION_TIMEOUT", 15);
     pub static ref DNS_SESSION_TIMEOUT: u64 = get_env_var_or("DNS_SESSION_TIMEOUT", 5);
+    pub static ref TCP_KEEPALIVE_TIMEOUT: u64 = get_env_var_or("DNS_SESSION_TIMEOUT", 600);
+    pub static ref TCP_KEEPALIVE_INTERVAL: u64 = get_env_var_or("DNS_SESSION_TIMEOUT", 60);
     pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
     pub static ref NETSTACK_OUTPUT_CHANNEL_SIZE: usize =
         get_env_var_or("NETSTACK_OUTPUT_CHANNEL_SIZE", 512);
