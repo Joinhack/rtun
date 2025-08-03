@@ -100,7 +100,7 @@ impl TcpHandle {
             )
             .await
             {
-                error!(" Tcp copy {src_addr} <-> {dst_addr} error, {e}");
+                error!(" Tcp copy error {src_addr} <-> {dst_addr}, {e}");
             }
             let count = counter.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             debug!(" Tcp disconnect  {src_addr} <-> {dst_addr} count:{count}");
