@@ -20,6 +20,6 @@ netstack-lwip = { workspace = true }
 lazy_static = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
-socket2 = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
 trust-dns-proto = { workspace = true }
 if-watch = { workspace = true, features = ["tokio"] }
