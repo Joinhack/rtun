@@ -35,8 +35,7 @@ pub fn create_outbound_tcp_socket(addr: &SocketAddr) -> io::Result<TcpSocket> {
         .with_retries(*TCP_KEEPALIVE_RETRIES);
     socket.set_keepalive(true)?;
     socket.set_tcp_keepalive(&keepalive)?;
-
-    let stream: std::net::TcpStream = socket.into();
-    let socket = TcpSocket::from_std_stream(stream);
+    socket.set_nonblocking(true)?;
+    let socket = TcpSocket::from_std_stream(socket.into());
     Ok(socket)
 }

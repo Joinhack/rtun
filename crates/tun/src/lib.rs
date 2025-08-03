@@ -118,6 +118,47 @@ impl PostTunSetup {
         add_default_ipv4_route(&self.default_gw, &self.default_iface, true)?;
         Ok(())
     }
+
+    /// if the if ip changed, reset the the route.
+    async fn monitor(self, mut ip_abort_watcher: Abortable<IfWatcher>) {
+        let mut tun_setup = self;
+        let mut default_ipaddr = tun_setup.default_iface_addr;
+        let mut default_iface_up = true;
+        while let Some(Ok(event)) = ip_abort_watcher.next().await {
+            match event {
+                IfEvent::Up(_) => {
+                    if !default_iface_up {
+                        match get_if_addr(&tun_setup.default_iface) {
+                            Ok(ip) => {
+                                if ip != default_ipaddr {
+                                    // When the event is received, attempting to get the interface address immediately may fail.
+                                    tokio::time::sleep(Duration::from_millis(500)).await;
+                                    if let Ok(rt) = PostTunSetup::new(
+                                        tun_setup.gw.clone(),
+                                        tun_setup.iface.clone(),
+                                    ) {
+                                        default_ipaddr = ip;
+                                        default_iface_up = true;
+                                        tun_setup = rt;
+                                        if let Err(e) = tun_setup.setup() {
+                                            error!("error {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => (),
+                        };
+                    }
+                }
+                IfEvent::Down(ip_net) => {
+                    if default_ipaddr == ip_net.addr() {
+                        default_iface_up = false;
+                    }
+                }
+            }
+        }
+        let _ = tun_setup.unsetup();
+    }
 }
 
 impl Tun {
@@ -155,46 +196,9 @@ impl Tun {
 
         let ip_watcher = IfWatcher::new()?;
         let (abort_handle, abort_reg) = AbortHandle::new_pair();
-        let mut ip_abort_watcher = Abortable::new(ip_watcher, abort_reg);
+        let ip_abort_watcher = Abortable::new(ip_watcher, abort_reg);
         // ip monitor if the ip changed, reset the route with command.
-        let monitor_joinable = tokio::spawn(async move {
-            let mut tun_setup = tun_setup;
-            let mut default_ipaddr = tun_setup.default_iface_addr;
-            let mut default_iface_up = true;
-            while let Some(Ok(event)) = ip_abort_watcher.next().await {
-                match event {
-                    IfEvent::Up(_) => {
-                        if !default_iface_up {
-                            match get_if_addr(&tun_setup.default_iface) {
-                                Ok(ip) => {
-                                    if ip != default_ipaddr {
-                                        tokio::time::sleep(Duration::from_millis(500)).await;
-                                        if let Ok(rt) = PostTunSetup::new(
-                                            tun_setup.gw.clone(),
-                                            tun_setup.iface.clone(),
-                                        ) {
-                                            default_ipaddr = ip;
-                                            default_iface_up = true;
-                                            tun_setup = rt;
-                                            if let Err(e) = tun_setup.setup() {
-                                                error!("error {}", e);
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(_) => (),
-                            };
-                        }
-                    }
-                    IfEvent::Down(ip_net) => {
-                        if default_ipaddr == ip_net.addr() {
-                            default_iface_up = false;
-                        }
-                    }
-                }
-            }
-            let _ = tun_setup.unsetup();
-        });
+        let monitor_joinable = tokio::spawn(tun_setup.monitor(ip_abort_watcher));
         // initialize the tcp/ip stack, get netstack,tcp,udp stack
         let (stack, mut tcp_listner, udp_socket) =
             netstack::NetStack::with_buffer_size(*NETSTACK_BUFF_SIZE, *NETSTACK_UDP_BUFF_SIZE)?;
