@@ -56,9 +56,6 @@ fn find_interface_index_cached(iface: &str) -> io::Result<u32> {
 }
 
 pub fn set_ip_bound_if<S: AsRawFd>(socket: &S, addr: &SocketAddr, iface: &str) -> io::Result<()> {
-    const IP_BOUND_IF: libc::c_int = 25; // bsd/netinet/in.h
-    const IPV6_BOUND_IF: libc::c_int = 125; // bsd/netinet6/in6.h
-
     unsafe {
         let index = find_interface_index_cached(iface)?;
 
@@ -66,14 +63,14 @@ pub fn set_ip_bound_if<S: AsRawFd>(socket: &S, addr: &SocketAddr, iface: &str) -
             SocketAddr::V4(_) => libc::setsockopt(
                 socket.as_raw_fd(),
                 libc::IPPROTO_IP,
-                IP_BOUND_IF,
+                libc::IP_BOUND_IF,
                 &index as *const _ as *const _,
                 mem::size_of_val(&index) as libc::socklen_t,
             ),
             SocketAddr::V6(_) => libc::setsockopt(
                 socket.as_raw_fd(),
                 libc::IPPROTO_IPV6,
-                IPV6_BOUND_IF,
+                libc::IPV6_BOUND_IF,
                 &index as *const _ as *const _,
                 mem::size_of_val(&index) as libc::socklen_t,
             ),
