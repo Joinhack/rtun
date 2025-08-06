@@ -4,6 +4,7 @@ use std::{io::BufRead, net::IpAddr, process::Command};
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(target_os = "macos")]
 mod macos {
     use super::*;
     pub fn get_default_gw_iface() -> Result<(String, String)> {
@@ -64,6 +65,7 @@ mod macos {
 #[cfg(target_os = "linux")]
 pub use linux::*;
 
+#[cfg(target_os = "linux")]
 mod linux {
 
     use super::*;

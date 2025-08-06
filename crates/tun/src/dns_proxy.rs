@@ -23,7 +23,10 @@ use tokio::{
 };
 use trust_dns_proto::op::Message;
 
-use crate::{net::create_outbound_udp_socket, option::DNS_SESSION_TIMEOUT};
+use crate::{
+    net::create_outbound_udp_socket,
+    option::{DNS_SESSION_TIMEOUT, MAX_UDP_UPSTREAM},
+};
 
 struct UdpPeer {
     src: SocketAddr,
@@ -250,7 +253,7 @@ impl Future for RecvFut {
 }
 
 pub struct DnsProxy {
-    upstream: Vec<UnboundedSender<(UdpPeer, Message)>>,
+    upstream: Vec<Option<UnboundedSender<(UdpPeer, Message)>>>,
     id: Arc<AtomicU16>,
     session_clear: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     idx: usize,
@@ -283,12 +286,13 @@ impl DnsProxy {
             }
             .boxed(),
         );
+        let max_upstream = *MAX_UDP_UPSTREAM;
         Self {
-            upstream: Vec::new(),
+            upstream: vec![None; max_upstream as usize],
             id: Arc::new(AtomicU16::new(1)),
             idx: 0,
             session_clear,
-            max_upstream: 3,
+            max_upstream,
             tun_udp_sender,
             sessions,
         }
@@ -300,14 +304,12 @@ impl DnsProxy {
         if let Some(sessions_clear) = self.session_clear.take() {
             tokio::spawn(sessions_clear);
         }
-
-        match self.upstream.get(idx) {
-            Some(s) => s.send((UdpPeer { src, dest }, msg))?,
-            None => {
+        let new_upstream =
+            |s: &mut Option<UnboundedSender<(UdpPeer, Message)>>, message: Message| -> Result<()> {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let udp_socket = Arc::new(create_outbound_udp_socket(&dest).unwrap());
-                tx.send((UdpPeer { src, dest }, msg))?;
-                self.upstream.push(tx);
+                tx.send((UdpPeer { src, dest }, message))?;
+                s.replace(tx);
                 tokio::spawn(SendFut::new(
                     self.id.clone(),
                     udp_socket.clone(),
@@ -319,7 +321,19 @@ impl DnsProxy {
                     self.tun_udp_sender.clone(),
                     self.sessions.clone(),
                 ));
+                Ok(())
+            };
+        match self.upstream.get_mut(idx) {
+            Some(s) => {
+                if s.is_none() {
+                    new_upstream(s, msg)?;
+                } else {
+                    if let Some(Err(e)) = s.as_mut().map(|s| s.send((UdpPeer { src, dest }, msg))) {
+                        new_upstream(s, e.0.1)?;
+                    }
+                }
             }
+            None => unreachable!("can't reach there."),
         };
         Ok(())
     }
