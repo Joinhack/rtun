@@ -47,6 +47,7 @@ impl TunBuilder {
         tun_config.destination(*TUN_GATEWAY);
         tun_config.netmask(*TUN_NETMASK);
         tun_config.tun_name(TUN_DEFAULT_NAME.as_str());
+        tun_config.up();
         Self { tun_config }
     }
     pub fn address<Addr: ToAddress>(&mut self, addr: Addr) -> &mut TunBuilder {
