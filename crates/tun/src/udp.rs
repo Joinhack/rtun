@@ -38,6 +38,12 @@ impl UdpHandle {
         }
     }
 
+    /// Handle the UDP socket, it will receive packets from the local tunnel and send them to the remote.
+    /// It will also handle DNS packets if the destination port is 53.
+    /// It will create a new session for each unique source address and forward packets accordingly.
+    /// It will also handle DNS resolution using the provided `FakeDNS`.
+    /// It will spawn tasks to forward packets to and from the remote address.
+    /// It will clean up sessions that are no longer active.
     pub async fn handle_udp_socket(&self, udp_socket: Pin<Box<UdpSocket>>) -> io::Result<()> {
         let (udp_tx, mut udp_rx) = udp_socket.split();
 

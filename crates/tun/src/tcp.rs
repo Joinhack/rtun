@@ -36,7 +36,14 @@ impl TcpHandle {
             counter: Arc::new(AtomicU32::new(0)),
         }
     }
-    /// hanlde tcp packet.
+    
+    /// Handle a TCP stream, connecting to the destination address.
+    /// This function spawns a new task to handle the TCP connection.
+    /// It uses a fake DNS to resolve domain names if necessary,
+    /// and it supports SOCKS5 proxying if the destination address is a domain.
+    /// The function will copy data bidirectionally
+    /// between the TCP stream and the connected socket,
+    /// with timeouts for both uplink and downlink.
     pub async fn handle_tcp_stream(
         &self,
         src_addr: SocketAddr,

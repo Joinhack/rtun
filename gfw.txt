@@ -3396,9 +3396,7 @@ collateralmurder.com
 collateralmurder.org
 wikimapia.org
 wikiwand.com
-casino.williamhill.com
-sports.williamhill.com
-vegas.williamhill.com
+williamhill.com
 willw.net
 windscribe.com
 wingy.site
@@ -3585,3 +3583,4 @@ zuobiao.me
 zuola.com
 zvereff.com
 zyxel.com
+brew.sh
