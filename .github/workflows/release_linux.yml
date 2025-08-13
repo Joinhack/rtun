@@ -35,6 +35,12 @@ jobs:
         with:
           toolchain: stable
           target: ${{ matrix.target }}
+      - name: Prepared Tools
+        run: |
+          echo `pwd`
+          sudo apt install  gcc-aarch64-linux-gnu
+          sudo apt install build-essential
+
       - name: Add rust Target
         run: |
           rustup target add ${{ matrix.target }}
