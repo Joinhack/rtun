@@ -13,7 +13,7 @@ name = "rustun"
 path = "src/main.rs"
 
 [features]
-defaults = []
+default = []
 tcmalloc = ["tcmalloc/bundled"]
 
 

@@ -1,4 +1,4 @@
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use log::{debug, error};
 use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
@@ -8,6 +8,7 @@ use std::time::Duration;
 use std::{collections::HashMap, io};
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::time;
 
@@ -27,14 +28,37 @@ type SessionMap = Arc<Mutex<HashMap<SocketAddr, Sender<UdpPkg>>>>;
 pub struct UdpHandle {
     sessions: SessionMap,
 
+    clear_fut: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
+
     fake_dns: Arc<FakeDNS>,
 }
 
 impl UdpHandle {
-    pub fn new(fake_dns: Arc<FakeDNS>) -> Self {
+    pub fn new(fake_dns: Arc<FakeDNS>, mut notify: broadcast::Receiver<()>) -> Self {
+        let sessions: SessionMap = Default::default();
+        let sessions_clone = sessions.clone();
+        let clear_fut = async move {
+            loop {
+                match notify.recv().await {
+                    Ok(_) => {
+                        let mut guard = sessions_clone.lock().await;
+                        guard.clear();
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        debug!("recv Lagged message.")
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("notify channel closed.");
+                        return;
+                    }
+                };
+            }
+        }
+        .boxed();
         Self {
-            sessions: Default::default(),
+            sessions,
             fake_dns,
+            clear_fut: Some(clear_fut),
         }
     }
 
@@ -44,7 +68,10 @@ impl UdpHandle {
     /// It will also handle DNS resolution using the provided `FakeDNS`.
     /// It will spawn tasks to forward packets to and from the remote address.
     /// It will clean up sessions that are no longer active.
-    pub async fn handle_udp_socket(&self, udp_socket: Pin<Box<UdpSocket>>) -> io::Result<()> {
+    pub async fn handle_udp_socket(mut self, udp_socket: Pin<Box<UdpSocket>>) -> io::Result<()> {
+        if let Some(fut) = self.clear_fut.take() {
+            tokio::spawn(fut);
+        }
         let (udp_tx, mut udp_rx) = udp_socket.split();
 
         let sessions = &self.sessions;

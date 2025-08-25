@@ -19,6 +19,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, pin::Pin};
+use tokio::sync::broadcast;
 use tun::{
     AbstractDevice, AsyncDevice, Configuration as TunConfiguration, ToAddress, create_as_async,
 };
@@ -91,15 +92,17 @@ struct PostTunSetup {
     default_gw: String,
     default_iface: String,
     default_iface_addr: IpAddr,
+    notify_tx: broadcast::Sender<()>,
 }
 
 impl PostTunSetup {
-    fn new(gw: String, iface: String) -> Result<Self> {
+    fn new(gw: String, iface: String, notify_tx: broadcast::Sender<()>) -> Result<Self> {
         let (default_gw, default_iface) = get_default_gw_iface()?;
         let default_iface_addr = get_if_addr(&default_iface)?;
         Ok(Self {
             gw,
             iface,
+            notify_tx,
             default_gw,
             default_iface,
             default_iface_addr,
@@ -131,19 +134,19 @@ impl PostTunSetup {
                     if !default_iface_up {
                         match get_if_addr(&tun_setup.default_iface) {
                             Ok(ip) => {
-                                if ip != default_ipaddr {
-                                    // When the event is received, attempting to get the interface address immediately may fail.
-                                    tokio::time::sleep(Duration::from_millis(500)).await;
-                                    if let Ok(rt) = PostTunSetup::new(
-                                        tun_setup.gw.clone(),
-                                        tun_setup.iface.clone(),
-                                    ) {
-                                        default_ipaddr = ip;
-                                        default_iface_up = true;
-                                        tun_setup = rt;
-                                        if let Err(e) = tun_setup.setup() {
-                                            error!("error {}", e);
-                                        }
+                                // When the event is received, attempting to get the interface address immediately may fail.
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                if let Ok(rt) = PostTunSetup::new(
+                                    tun_setup.gw.clone(),
+                                    tun_setup.iface.clone(),
+                                    tun_setup.notify_tx.clone(),
+                                ) {
+                                    tun_setup.notify_tx.send(()).unwrap();
+                                    default_ipaddr = ip;
+                                    default_iface_up = true;
+                                    tun_setup = rt;
+                                    if let Err(e) = tun_setup.setup() {
+                                        error!("error {}", e);
                                     }
                                 }
                             }
@@ -183,8 +186,9 @@ impl Tun {
                 return Err(err.into());
             }
         };
-
-        let tun_setup = PostTunSetup::new(destination.to_string(), iface).unwrap();
+        let (notify_tx, tcp_notify_rx) = tokio::sync::broadcast::channel(1);
+        let udp_notify_rx = notify_tx.subscribe();
+        let tun_setup = PostTunSetup::new(destination.to_string(), iface, notify_tx).unwrap();
         tun_setup.setup().unwrap();
         if let Err(_) = env::var(OUTBOUND_INTERFACES_NAME) {
             unsafe {
@@ -247,8 +251,9 @@ impl Tun {
         fake_dns.set_filter(parse_rules()?).await;
         let fake_dns = Arc::new(fake_dns);
         let fake_dns_cl = fake_dns.clone();
+        // tcp process, recv from tun and process the tcp.
         let tcp_listener_fut = Box::pin(async move {
-            let tcp_handle = TcpHandle::new(fake_dns_cl);
+            let mut tcp_handle = TcpHandle::new(fake_dns_cl, tcp_notify_rx);
             while let Some((stream, local_addr, remote_addr)) = tcp_listner.next().await {
                 let _ = tcp_handle
                     .handle_tcp_stream(local_addr, remote_addr, stream)
@@ -256,8 +261,9 @@ impl Tun {
             }
         });
         futs.push(tcp_listener_fut);
+        // udp process, recv from tun and process the udp.
         let udp_socket_fut = Box::pin(async move {
-            let udp_handle = UdpHandle::new(fake_dns);
+            let udp_handle = UdpHandle::new(fake_dns, udp_notify_rx);
             let _ = udp_handle.handle_udp_socket(udp_socket).await;
         });
         futs.push(udp_socket_fut);
