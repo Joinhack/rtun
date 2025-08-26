@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cancelable::{CancelHandle, Cancelable, CancelableResult};
 use crate::fakedns::FakeDNS;
 use crate::net::{CopyTrait, copy_bidirectional_with_timeout, create_outbound_tcp_socket};
 use crate::option::{
@@ -13,7 +14,6 @@ use crate::option::{
 };
 use crate::socks5::{self, Socks5Addr};
 use futures::FutureExt;
-use futures::stream::{AbortHandle, Abortable};
 use log::{debug, error, info};
 use netstack_lwip::TcpStream;
 use tokio::sync::Mutex;
@@ -29,7 +29,7 @@ impl Into<Box<dyn CopyTrait>> for tokio::net::TcpStream {
     }
 }
 
-type ConnectsType = Arc<Mutex<HashMap<(SocketAddr, SocketAddr), AbortHandle>>>;
+type ConnectsType = Arc<Mutex<HashMap<(SocketAddr, SocketAddr), CancelHandle>>>;
 
 pub struct TcpHandle {
     fake_dns: Arc<FakeDNS>,
@@ -47,10 +47,8 @@ impl TcpHandle {
                     Ok(_) => {
                         // the ip chaned, clean all connections.
                         info!("clear all tcp connections");
-                        let guard = connects_cl.lock().await;
-                        for abort in guard.values() {
-                            abort.abort();
-                        }
+                        let mut guard = connects_cl.lock().await;
+                        guard.clear();
                     }
                     Err(RecvError::Lagged(_)) => {
                         debug!("recv Lagged message.")
@@ -133,15 +131,8 @@ impl TcpHandle {
                 }
             };
 
-            let (abord_handle, abort_reg) = AbortHandle::new_pair();
             let connects_key = (src_addr, dst_addr);
-            //connects_guard must drop  if insert success.
-            let count = {
-                let mut connects_guard = connects.lock().await;
-                connects_guard.insert(connects_key, abord_handle);
-                connects_guard.len()
-            };
-            debug!("created TCP connection for {src_addr} <-> {dst_addr} count:{count}");
+
             let copy_fut = copy_bidirectional_with_timeout(
                 &mut proxy_conn,
                 &mut tcp_stream,
@@ -149,10 +140,24 @@ impl TcpHandle {
                 Duration::from_secs(*DOWNLINK_COPY_TIMEOUT),
                 Duration::from_secs(*UPLINK_COPY_TIMEOUT),
             );
-            let copy_fut = Abortable::new(copy_fut, abort_reg);
-            if let Err(e) = copy_fut.await {
-                error!("Tcp copy error {src_addr} <-> {dst_addr}, {e}");
-            }
+            let (copy_fut, handle) = Cancelable::new(copy_fut);
+            //connects_guard must drop  if insert success.
+            let count = {
+                let mut connects_guard = connects.lock().await;
+                connects_guard.insert(connects_key, handle);
+                connects_guard.len()
+            };
+            debug!("created TCP connection for {src_addr} <-> {dst_addr} count:{count}");
+            match copy_fut.await {
+                CancelableResult::Result(Ok(_)) => (),
+                CancelableResult::Result(Err(e)) => {
+                    error!("TCP copy {src_addr} <-> {dst_addr} error, {e}");
+                }
+                CancelableResult::Cancelled => {
+                    error!("Tcp copy {src_addr} <-> {dst_addr} cancelled.");
+                }
+            };
+
             let count = {
                 let mut connects_guard = connects.lock().await;
                 connects_guard.remove(&connects_key);

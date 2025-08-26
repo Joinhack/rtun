@@ -1,3 +1,4 @@
+mod cancelable;
 mod cmd;
 mod dns_proxy;
 mod fakedns;
@@ -8,7 +9,6 @@ mod tcp;
 mod udp;
 
 use anyhow::Result;
-use futures::stream::{AbortHandle, Abortable};
 use futures::{SinkExt, StreamExt};
 use if_watch::IfEvent;
 use if_watch::tokio::IfWatcher;
@@ -26,6 +26,7 @@ use tun::{
 
 use netstack_lwip as netstack;
 
+use crate::cancelable::{Cancelable, CancelableResult};
 use crate::cmd::{
     add_default_ipv4_route, delete_default_ipv4_route, get_default_gw_iface, get_if_addr,
 };
@@ -124,11 +125,11 @@ impl PostTunSetup {
     }
 
     /// if the if ip changed, reset the the route.
-    async fn monitor(self, mut ip_abort_watcher: Abortable<IfWatcher>) {
+    async fn monitor(self, mut ip_abort_watcher: Cancelable<IfWatcher>) {
         let mut tun_setup = self;
         let mut default_ipaddr = tun_setup.default_iface_addr;
         let mut default_iface_up = true;
-        while let Some(Ok(event)) = ip_abort_watcher.next().await {
+        while let Some(CancelableResult::Result(Ok(event))) = ip_abort_watcher.next().await {
             match event {
                 IfEvent::Up(_) => {
                     if !default_iface_up {
@@ -141,7 +142,6 @@ impl PostTunSetup {
                                     tun_setup.iface.clone(),
                                     tun_setup.notify_tx.clone(),
                                 ) {
-                                    tun_setup.notify_tx.send(()).unwrap();
                                     default_ipaddr = ip;
                                     default_iface_up = true;
                                     tun_setup = rt;
@@ -156,6 +156,7 @@ impl PostTunSetup {
                 }
                 IfEvent::Down(ip_net) => {
                     if default_ipaddr == ip_net.addr() {
+                        tun_setup.notify_tx.send(()).unwrap();
                         default_iface_up = false;
                     }
                 }
@@ -200,8 +201,7 @@ impl Tun {
         }
 
         let ip_watcher = IfWatcher::new()?;
-        let (abort_handle, abort_reg) = AbortHandle::new_pair();
-        let ip_abort_watcher = Abortable::new(ip_watcher, abort_reg);
+        let (ip_abort_watcher, abort_handle) = Cancelable::new(ip_watcher);
         // ip monitor if the ip changed, reset the route with command.
         let monitor_joinable = tokio::spawn(tun_setup.monitor(ip_abort_watcher));
         // initialize the tcp/ip stack, get netstack,tcp,udp stack
@@ -273,7 +273,7 @@ impl Tun {
         }));
 
         futures::future::select_all(futs).await;
-        abort_handle.abort();
+        abort_handle.cancel();
         let _ = monitor_joinable.await;
         Ok(())
     }
