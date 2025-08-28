@@ -265,10 +265,10 @@ pub struct DnsProxy {
 impl DnsProxy {
     pub fn new(tun_udp_sender: Arc<SendHalf>) -> Self {
         let sessions: Arc<Mutex<HashMap<u16, DnsSession>>> = Default::default();
-        let sessions_clone = sessions.clone();
+        let sessions1 = sessions.clone();
         let session_clear = Some(
             async move {
-                let sessions = sessions_clone;
+                let sessions = sessions1;
                 loop {
                     sleep(Duration::from_secs(10)).await;
                     let mut guard = sessions.lock().await;
@@ -304,6 +304,7 @@ impl DnsProxy {
         if let Some(sessions_clear) = self.session_clear.take() {
             tokio::spawn(sessions_clear);
         }
+
         let new_upstream =
             |s: &mut Option<UnboundedSender<(UdpPeer, Message)>>, message: Message| -> Result<()> {
                 let (tx, rx) = mpsc::unbounded_channel();

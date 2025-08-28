@@ -4,6 +4,7 @@ use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{collections::HashMap, io};
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -14,6 +15,7 @@ use tokio::time;
 
 use std::{net::SocketAddr, pin::Pin};
 
+use crate::cancelable::{CancelHandle, Cancelable};
 use crate::dns_proxy::DnsProxy;
 use crate::fakedns::{FakeDNS, FakeDnsProcessed};
 use crate::option::UDP_SESSION_TIMEOUT;
@@ -23,7 +25,7 @@ struct UdpPkg {
     payload: Vec<u8>,
 }
 
-type SessionMap = Arc<Mutex<HashMap<SocketAddr, Sender<UdpPkg>>>>;
+type SessionMap = Arc<Mutex<HashMap<SocketAddr, (Sender<UdpPkg>, CancelHandle)>>>;
 
 pub struct UdpHandle {
     sessions: SessionMap,
@@ -37,12 +39,16 @@ impl UdpHandle {
     pub fn new(fake_dns: Arc<FakeDNS>, mut notify: broadcast::Receiver<()>) -> Self {
         let sessions: SessionMap = Default::default();
         let sessions_clone = sessions.clone();
+        let dns_upstream_flag = Arc::new(AtomicBool::new(false));
+        let dns_upstream_flag1 = dns_upstream_flag.clone();
+
         let clear_fut = async move {
             loop {
                 match notify.recv().await {
                     Ok(_) => {
                         let mut guard = sessions_clone.lock().await;
                         guard.clear();
+                        dns_upstream_flag1.store(true, Ordering::Release);
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         debug!("recv Lagged message.")
@@ -77,7 +83,6 @@ impl UdpHandle {
         let sessions = &self.sessions;
         let udp_tx = Arc::new(udp_tx);
         let mut dns_proxy = DnsProxy::new(udp_tx.clone());
-
         // recv from local tunnel packet then send them to remote.
         let forward_to_outgoing =
             |mut rx: Receiver<UdpPkg>, d_addr: SocketAddr, proxy_udp_cl: Arc<TokioUdpSocket>| async move {
@@ -155,7 +160,7 @@ impl UdpHandle {
             let entry = sesses.entry(s_addr);
             match entry {
                 Entry::Occupied(mut entry) => {
-                    if let Err(e) = entry.get_mut().send(UdpPkg { payload: data }).await {
+                    if let Err(e) = entry.get_mut().0.send(UdpPkg { payload: data }).await {
                         error!("send channel is closed, error: {}", e);
                         entry.remove();
                     }
@@ -170,12 +175,16 @@ impl UdpHandle {
                     let proxy_udp = create_outbound_udp_socket(&d_addr).unwrap();
                     let proxy_udp = Arc::new(proxy_udp);
                     let proxy_udp_cl = proxy_udp.clone();
-                    vacant.insert(tx);
+
                     // recv from local channel and send to remote address.
                     tokio::spawn(forward_to_outgoing(rx, d_addr, proxy_udp_cl));
                     let udp_tx_cl = udp_tx.clone();
                     let sessions = sessions.clone();
-                    tokio::spawn(forward_to_incoming(sessions, s_addr, udp_tx_cl, proxy_udp));
+                    let (cancle_fut, handle) = Cancelable::new(forward_to_incoming(
+                        sessions, s_addr, udp_tx_cl, proxy_udp,
+                    ));
+                    vacant.insert((tx, handle));
+                    tokio::spawn(cancle_fut);
                 }
             };
         }
