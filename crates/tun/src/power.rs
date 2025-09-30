@@ -89,7 +89,6 @@ unsafe extern "C" fn power_callback<C>(
     C: Fn() + Send + 'static,
 {
     let callback: *mut C = ref_p as *mut C;
-
     match message_type {
         kIOMessageSystemWillSleep => unsafe {
             info!("kIOMessageSystemWillSleep");
@@ -112,6 +111,7 @@ impl PowerNotify {
     where
         C: Fn() + Send + 'static,
     {
+        //send the runloop handle from thread
         let (tx, rx) = channel();
         let _ = std::thread::spawn(move || unsafe {
             let callback: Box<C> = Box::new(callback);
