@@ -147,7 +147,7 @@ impl TcpHandle {
                 connects_guard.insert(connects_key, handle);
                 connects_guard.len()
             };
-            debug!("created TCP connection for {src_addr} <-> {dst_addr} count:{count}");
+            info!("created TCP connection for {src_addr} <-> {dst_addr} count:{count}");
             match copy_fut.await {
                 CancelableResult::Result(Ok(_)) => (),
                 CancelableResult::Result(Err(e)) => {
@@ -163,7 +163,7 @@ impl TcpHandle {
                 connects_guard.remove(&connects_key);
                 connects_guard.len()
             };
-            debug!("Tcp disconnect  {src_addr} <-> {dst_addr} count:{count}");
+            info!("Tcp disconnect  {src_addr} <-> {dst_addr} count:{count}");
         });
 
         Ok(())

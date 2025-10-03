@@ -5,7 +5,6 @@ mod fakedns;
 mod net;
 mod option;
 mod power;
-// mod smux;
 mod socks5;
 mod tcp;
 mod udp;
