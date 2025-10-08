@@ -28,3 +28,4 @@ trust-dns-proto = { workspace = true }
 tcmalloc = { workspace = true, optional = true }
 if-watch = { workspace = true, features = ["tokio"] }
 pin-project-lite = { workspace = true }
+ring = { workspace = true }
