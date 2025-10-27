@@ -31,6 +31,8 @@ impl Into<Box<dyn CopyTrait>> for tokio::net::TcpStream {
 
 type ConnectsType = Arc<Mutex<HashMap<(SocketAddr, SocketAddr), CancelHandle>>>;
 
+type ConnectFut = Pin<Box<dyn Future<Output = io::Result<Box<dyn CopyTrait>>> + Send>>;
+
 pub struct TcpHandle {
     fake_dns: Arc<FakeDNS>,
     clear_task: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
@@ -95,10 +97,10 @@ impl TcpHandle {
                     return;
                 }
             };
-            let mut connect_fut: Option<
-                Pin<Box<dyn Future<Output = io::Result<Box<dyn CopyTrait>>> + Send>>,
-            > = None;
+
+            let mut connect_fut: Option<ConnectFut> = None;
             if let SocketAddr::V4(addr) = dst_addr {
+                // connect the sock5 address
                 if let Some(s) = fake_dns.query_domain(addr.ip().to_bits()).await {
                     connect_fut = Some(Box::pin(async move {
                         socks5::Sock5TcpStream::connect(
@@ -157,7 +159,6 @@ impl TcpHandle {
                     error!("Tcp copy {src_addr} <-> {dst_addr} cancelled.");
                 }
             };
-
             let count = {
                 let mut connects_guard = connects.lock().await;
                 connects_guard.remove(&connects_key);

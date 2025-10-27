@@ -37,7 +37,6 @@ use crate::option::{
     NETSTACK_BUFF_SIZE, NETSTACK_UDP_BUFF_SIZE, OUTBOUND_INTERFACES_NAME, TUN_ADDRESS,
     TUN_DEFAULT_NAME, TUN_GATEWAY, TUN_NETMASK,
 };
-use crate::power::PowerNotify;
 use crate::tcp::TcpHandle;
 use crate::udp::UdpHandle;
 
@@ -191,7 +190,6 @@ impl Tun {
             }
         };
         let (notify_tx, tcp_notify_rx) = tokio::sync::broadcast::channel(1);
-        let power_tx = notify_tx.clone();
         let udp_notify_rx = notify_tx.subscribe();
         let tun_setup = PostTunSetup::new(destination.to_string(), iface, notify_tx).unwrap();
         tun_setup.setup().unwrap();
@@ -203,10 +201,6 @@ impl Tun {
                 );
             }
         }
-        // when will sleep notify  cancel tcp and udp.
-        let _power_notify = PowerNotify::new(move || {
-            power_tx.send(()).unwrap();
-        });
         let ip_watcher = IfWatcher::new()?;
         let (ip_abort_watcher, abort_handle) = Cancelable::new(ip_watcher);
         // ip monitor if the ip changed, reset the route with command.
