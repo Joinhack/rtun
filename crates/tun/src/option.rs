@@ -19,8 +19,8 @@ lazy_static! {
     pub static ref UDP_RECV_CH_SIZE: usize = get_env_var_or("UDP_RECV_CH_SIZE", 256);
     pub static ref OUTBOUND_CONNECT_TIMEOUT: u64 = get_env_var_or("TCP_CONNECT_TIMEOUT", 5);
     pub static ref TUN_DEFAULT_NAME: String = get_env_var_or("TUN_DEFAULT_NAME", IF_NAME.into());
-    pub static ref DOWNLINK_COPY_TIMEOUT: u64 = get_env_var_or("DOWNLINK_COPY_TIMEOUT", 60);
-    pub static ref UPLINK_COPY_TIMEOUT: u64 = get_env_var_or("UPLINK_COPY_TIMEOUT", 60);
+    pub static ref DOWNLINK_COPY_TIMEOUT: u64 = get_env_var_or("DOWNLINK_COPY_TIMEOUT", 60 * 3);
+    pub static ref UPLINK_COPY_TIMEOUT: u64 = get_env_var_or("UPLINK_COPY_TIMEOUT", 60 * 3);
     pub static ref LINK_BUFFER_SIZE: usize = get_env_var_or("LINK_BUFFER_SIZE", 2);
     pub static ref MAX_UDP_UPSTREAM: u8 = get_env_var_or("MAX_UDP_UPSTREAM", 3);
     pub static ref UDP_SESSION_TIMEOUT: u64 = get_env_var_or("UDP_SESSION_TIMEOUT", 15);
@@ -28,6 +28,7 @@ lazy_static! {
     pub static ref TCP_KEEPALIVE_TIMEOUT: u64 = get_env_var_or("TCP_KEEPALIVE_TIMEOUT", 600);
     pub static ref TCP_KEEPALIVE_INTERVAL: u64 = get_env_var_or("TCP_KEEPALIVE_INTERVAL", 60);
     pub static ref TCP_KEEPALIVE_RETRIES: u32 = get_env_var_or("TCP_KEEPALIVE_RETRIES", 5);
+    pub static ref DNS_PROXY_LISTEN_PORT: u16 = get_env_var_or("DNS_PROXY_LISTEN_PORT", 10880);
     pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
     pub static ref NETSTACK_OUTPUT_CHANNEL_SIZE: usize =
         get_env_var_or("NETSTACK_OUTPUT_CHANNEL_SIZE", 512);

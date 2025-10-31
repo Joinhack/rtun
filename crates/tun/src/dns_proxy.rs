@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 
-use futures::FutureExt;
+use futures::{FutureExt, task::AtomicWaker};
 use log::{error, trace};
 use netstack_lwip::udp::SendHalf;
 use std::{
@@ -8,7 +8,10 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, atomic::AtomicU16},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU16, Ordering},
+    },
     task::{Context, Poll, ready},
     time::{Duration, Instant},
 };
@@ -17,7 +20,7 @@ use tokio::{
     net::UdpSocket,
     sync::{
         Mutex, OwnedMutexGuard,
-        mpsc::{self, UnboundedReceiver, UnboundedSender},
+        mpsc::{self, Receiver, UnboundedReceiver, UnboundedSender, error::SendError},
     },
     time::sleep,
 };
@@ -25,7 +28,7 @@ use trust_dns_proto::op::Message;
 
 use crate::{
     net::create_outbound_udp_socket,
-    option::{DNS_SESSION_TIMEOUT, MAX_UDP_UPSTREAM},
+    option::{DNS_PROXY_LISTEN_PORT, DNS_SESSION_TIMEOUT, MAX_UDP_UPSTREAM},
 };
 
 struct UdpPeer {
@@ -98,7 +101,9 @@ impl Future for SendFut {
                     // read from channel util the channel closed.
                     let d = match ready!(rx.poll_recv(cx)) {
                         Some(v) => v,
-                        None => return Poll::Ready(Err(anyhow!("channel is shutdwon."))),
+                        None => {
+                            return Poll::Ready(Err(anyhow!("channel is shutdwon.")));
+                        }
                     };
                     // unmarshal the data if fail continue to process next packet.
                     let mut messgae = d.1;
@@ -165,9 +170,11 @@ enum RecvState {
 struct RecvFut {
     state: RecvState,
     sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,
+    running: Arc<AtomicBool>,
     udp_socket: Arc<UdpSocket>,
     tun_udp_sender: Arc<SendHalf>,
     msg: Option<Message>,
+    waker: Arc<AtomicWaker>,
     buf: Vec<u8>,
 }
 
@@ -176,6 +183,8 @@ impl RecvFut {
         udp_socket: Arc<UdpSocket>,
         tun_udp_sender: Arc<SendHalf>,
         sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,
+        running: Arc<AtomicBool>,
+        waker: Arc<AtomicWaker>,
     ) -> Self {
         Self {
             state: RecvState::Begin,
@@ -184,6 +193,8 @@ impl RecvFut {
             tun_udp_sender,
             msg: None,
             buf: vec![0u8; 1500],
+            running,
+            waker,
         }
     }
 }
@@ -195,12 +206,19 @@ impl Future for RecvFut {
         let RecvFut {
             sessions,
             udp_socket,
+            running,
             state,
             tun_udp_sender,
             buf,
             msg,
+            waker,
         } = &mut *self;
         loop {
+            if !running.load(Ordering::Acquire) {
+                error!("recv future canceled.");
+                return Poll::Ready(Err(anyhow!("recv future canceled.")));
+            }
+            waker.register(cx.waker());
             match state {
                 RecvState::Begin => {
                     let mut read_buf = ReadBuf::new(buf);
@@ -252,20 +270,42 @@ impl Future for RecvFut {
     }
 }
 
+#[derive(Clone)]
+struct UpstreamSender {
+    inner: UnboundedSender<(UdpPeer, Message)>,
+    running: Arc<AtomicBool>,
+    waker: Arc<AtomicWaker>,
+}
+
+impl UpstreamSender {
+    fn send(&mut self, msg: (UdpPeer, Message)) -> Result<(), SendError<(UdpPeer, Message)>> {
+        self.inner.send(msg)
+    }
+}
+
+impl Drop for UpstreamSender {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+        self.waker.wake();
+    }
+}
+
 pub struct DnsProxy {
-    upstream: Vec<Option<UnboundedSender<(UdpPeer, Message)>>>,
+    upstream: Arc<Mutex<Vec<Option<UpstreamSender>>>>,
     id: Arc<AtomicU16>,
-    session_clear: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    session_clear: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
     idx: usize,
     max_upstream: u8,
+    dns_listen_port: u16,
     tun_udp_sender: Arc<SendHalf>,
     sessions: Arc<Mutex<HashMap<u16, DnsSession>>>,
 }
 
 impl DnsProxy {
-    pub fn new(tun_udp_sender: Arc<SendHalf>) -> Self {
+    pub fn new(tun_udp_sender: Arc<SendHalf>, dns_clear_rx: Receiver<()>) -> Self {
         let sessions: Arc<Mutex<HashMap<u16, DnsSession>>> = Default::default();
         let sessions1 = sessions.clone();
+
         let session_clear = Some(
             async move {
                 let sessions = sessions1;
@@ -287,14 +327,31 @@ impl DnsProxy {
             .boxed(),
         );
         let max_upstream = *MAX_UDP_UPSTREAM;
+        let upstream = Arc::new(Mutex::new(vec![None; max_upstream as usize]));
+        let upstream1 = upstream.clone();
+        tokio::spawn(async move {
+            let mut dns_clear_rx = dns_clear_rx;
+            loop {
+                if let Some(_) = dns_clear_rx.recv().await {
+                    let mut upstream = upstream1.lock().await;
+                    // release listener.
+                    for item in upstream.iter_mut() {
+                        *item = None;
+                    }
+                } else {
+                    return;
+                }
+            }
+        });
         Self {
-            upstream: vec![None; max_upstream as usize],
+            upstream,
             id: Arc::new(AtomicU16::new(1)),
             idx: 0,
             session_clear,
             max_upstream,
             tun_udp_sender,
             sessions,
+            dns_listen_port: *DNS_PROXY_LISTEN_PORT,
         }
     }
 
@@ -305,26 +362,40 @@ impl DnsProxy {
             tokio::spawn(sessions_clear);
         }
 
-        let new_upstream =
-            |s: &mut Option<UnboundedSender<(UdpPeer, Message)>>, message: Message| -> Result<()> {
-                let (tx, rx) = mpsc::unbounded_channel();
-                let udp_socket = Arc::new(create_outbound_udp_socket(&dest).unwrap());
-                tx.send((UdpPeer { src, dest }, message))?;
-                s.replace(tx);
-                tokio::spawn(SendFut::new(
-                    self.id.clone(),
-                    udp_socket.clone(),
-                    rx,
-                    self.sessions.clone(),
-                ));
-                tokio::spawn(RecvFut::new(
-                    udp_socket,
-                    self.tun_udp_sender.clone(),
-                    self.sessions.clone(),
-                ));
-                Ok(())
-            };
-        match self.upstream.get_mut(idx) {
+        let mut new_upstream = |s: &mut Option<UpstreamSender>, message: Message| -> Result<()> {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let listener_port = self.dns_listen_port;
+            let socket_addr: SocketAddr = format!("0.0.0.0:{listener_port}")
+                .parse()
+                .map_err(|e| anyhow!("{e}"))?;
+            let udp_socket =
+                Arc::new(create_outbound_udp_socket(&dest, Some(socket_addr)).unwrap());
+            self.dns_listen_port += 1;
+            tx.send((UdpPeer { src, dest }, message))?;
+            let recv_fut_running = Arc::new(AtomicBool::new(true));
+            let waker = Arc::new(AtomicWaker::new());
+            s.replace(UpstreamSender {
+                inner: tx,
+                running: recv_fut_running.clone(),
+                waker: waker.clone(),
+            });
+            tokio::spawn(SendFut::new(
+                self.id.clone(),
+                udp_socket.clone(),
+                rx,
+                self.sessions.clone(),
+            ));
+            tokio::spawn(RecvFut::new(
+                udp_socket,
+                self.tun_udp_sender.clone(),
+                self.sessions.clone(),
+                recv_fut_running,
+                waker,
+            ));
+            Ok(())
+        };
+        let mut upstream = self.upstream.lock().await;
+        match upstream.get_mut(idx) {
             Some(s) => {
                 if s.is_none() {
                     new_upstream(s, msg)?;

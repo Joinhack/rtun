@@ -1,18 +1,23 @@
 use std::net::SocketAddr;
 use std::{io, time::Duration};
 
-use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, TcpKeepalive, Type};
 use tokio::net::{TcpSocket, UdpSocket};
 
 use crate::option::{TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_RETRIES, TCP_KEEPALIVE_TIMEOUT};
 use crate::{net::set_ip_bound_if, option::OUTBOUND_INTERFACES};
 
-pub fn create_outbound_udp_socket(addr: &SocketAddr) -> io::Result<UdpSocket> {
+pub fn create_outbound_udp_socket(
+    addr: &SocketAddr,
+    bind_addr: Option<SocketAddr>,
+) -> io::Result<UdpSocket> {
     let socket = match *addr {
         SocketAddr::V4(_) => Socket::new(Domain::IPV4, Type::DGRAM, None)?,
         SocketAddr::V6(_) => Socket::new(Domain::IPV6, Type::DGRAM, None)?,
     };
-
+    if let Some(bind_addr) = bind_addr {
+        socket.bind(&SockAddr::from(bind_addr))?;
+    }
     socket.set_nonblocking(true)?;
     for iface in OUTBOUND_INTERFACES.iter() {
         set_ip_bound_if(&socket, addr, iface)?;
