@@ -7,7 +7,10 @@ use std::{
 };
 
 use futures::FutureExt;
-use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{self, AsyncRead, AsyncWrite, ReadBuf},
+    time::Sleep,
+};
 
 struct CopyBuf {
     read_done: bool,
@@ -150,8 +153,6 @@ struct CopyOneDirection<'a, R: ?Sized, W: ?Sized> {
     writer: Pin<&'a mut W>,
     state: &'a mut TransferState,
     amt: &'a mut u64,
-    sleep: &'a mut Option<Pin<Box<tokio::time::Sleep>>>,
-    sleep_time: &'a Duration,
 }
 
 impl<'a, R, W> CopyOneDirection<'a, R, W>
@@ -166,8 +167,6 @@ where
             reader,
             writer,
             state,
-            sleep,
-            sleep_time,
         } = &mut *self;
         loop {
             match state {
@@ -176,18 +175,7 @@ where
                     match copy_rs {
                         Poll::Ready(n) => **state = TransferState::Shuttingdow(n),
                         Poll::Pending => {
-                            if **amt == copy_buf.amt {
-                                if let Some(sleep) = sleep {
-                                    ready!(sleep.poll_unpin(cx));
-                                    **state = TransferState::Shuttingdow(**amt);
-                                    continue;
-                                } else {
-                                    **sleep = Some(Box::pin(tokio::time::sleep(**sleep_time)));
-                                }
-                            } else {
-                                **amt = copy_buf.amt;
-                                self.sleep.take();
-                            }
+                            **amt = copy_buf.amt;
                             return Poll::Pending;
                         }
                     }
@@ -209,10 +197,8 @@ struct CopyBidirectional<'a, A: ?Sized, B: ?Sized> {
     b_to_a_amt: u64,
     a_to_b_state: TransferState,
     b_to_a_state: TransferState,
-    a_to_b_sleep: Option<Pin<Box<tokio::time::Sleep>>>,
-    b_to_a_sleep: Option<Pin<Box<tokio::time::Sleep>>>,
-    a_to_b_timeout: Duration,
-    b_to_a_timeout: Duration,
+    timeout: Duration,
+    sleep: Option<Pin<Box<Sleep>>>,
 }
 
 impl<'a, A, B> CopyBidirectional<'a, A, B>
@@ -228,35 +214,50 @@ where
             b_to_a_amt,
             a_to_b_state,
             b_to_a_state,
-            a_to_b_sleep,
-            b_to_a_sleep,
-            a_to_b_timeout,
-            b_to_a_timeout,
+            timeout,
+            sleep,
         } = &mut *self;
         let mut a = Pin::new(a);
         let mut b = Pin::new(b);
+        let a_to_b_amt_old = *a_to_b_amt;
         let mut a_to_b = CopyOneDirection {
             reader: a.as_mut(),
             writer: b.as_mut(),
             state: a_to_b_state,
-            sleep: a_to_b_sleep,
             amt: a_to_b_amt,
-            sleep_time: a_to_b_timeout,
         };
-        let a_to_b = a_to_b.copy(cx)?;
 
+        // drop the a_to_b
+        let a_to_b = a_to_b.copy(cx)?;
+        let b_to_a_amt_old = *b_to_a_amt;
         let mut b_to_a = CopyOneDirection {
             reader: b.as_mut(),
             writer: a.as_mut(),
             state: b_to_a_state,
             amt: b_to_a_amt,
-            sleep: b_to_a_sleep,
-            sleep_time: b_to_a_timeout,
         };
         let b_to_a = b_to_a.copy(cx)?;
-        let a_to_b = ready!(a_to_b);
-        let b_to_a = ready!(b_to_a);
-        return Poll::Ready(Ok((a_to_b, b_to_a)));
+        match (a_to_b, b_to_a) {
+            (Poll::Pending, Poll::Pending) => {
+                // Start timeout detection when both upstream and downstream are idle (no data copying).
+                // Return timeout error if the operation exceeds the allowed time.
+                if a_to_b_amt_old == *a_to_b_amt && b_to_a_amt_old == *b_to_a_amt {
+                    if let Some(sleep) = sleep {
+                        ready!(sleep.poll_unpin(cx));
+                        return Poll::Ready(Err(io::Error::other(
+                            "connection idle timeout".to_string(),
+                        )));
+                    } else {
+                        *sleep = Some(Box::pin(tokio::time::sleep(*timeout)));
+                    }
+                } else {
+                    sleep.take();
+                }
+                Poll::Pending
+            }
+            (Poll::Ready(a_to_b), Poll::Ready(b_to_a)) => Poll::Ready(Ok((a_to_b, b_to_a))),
+            _ => Poll::Pending,
+        }
     }
 }
 
@@ -264,8 +265,7 @@ pub async fn copy_bidirectional_with_timeout<A, B>(
     a: &mut A,
     b: &mut B,
     size: usize,
-    a_to_b_timeout: Duration,
-    b_to_a_timeout: Duration,
+    timeout: Duration,
 ) -> io::Result<(u64, u64)>
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
@@ -278,10 +278,8 @@ where
         b_to_a_state: TransferState::Running(CopyBuf::new(size)),
         a_to_b_amt: 0,
         b_to_a_amt: 0,
-        a_to_b_timeout,
-        b_to_a_timeout,
-        a_to_b_sleep: None,
-        b_to_a_sleep: None,
+        timeout,
+        sleep: None,
     };
     poll_fn(|cx| copy_bidirectional.copy(cx)).await
 }
