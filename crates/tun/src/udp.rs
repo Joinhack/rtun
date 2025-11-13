@@ -4,7 +4,6 @@ use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{collections::HashMap, io};
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -33,22 +32,25 @@ pub struct UdpHandle {
     clear_fut: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
 
     fake_dns: Arc<FakeDNS>,
+
+    dns_clear_rx: Option<Receiver<()>>,
 }
 
 impl UdpHandle {
     pub fn new(fake_dns: Arc<FakeDNS>, mut notify: broadcast::Receiver<()>) -> Self {
         let sessions: SessionMap = Default::default();
         let sessions_clone = sessions.clone();
-        let dns_upstream_flag = Arc::new(AtomicBool::new(false));
-        let dns_upstream_flag1 = dns_upstream_flag.clone();
-
+        let (dns_clear_tx, dns_clear_rx) = channel(16);
         let clear_fut = async move {
             loop {
                 match notify.recv().await {
                     Ok(_) => {
                         let mut guard = sessions_clone.lock().await;
                         guard.clear();
-                        dns_upstream_flag1.store(true, Ordering::Release);
+                        if let Err(_) = dns_clear_tx.send(()).await {
+                            error!("The dns clear channel closed.");
+                            return;
+                        }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         debug!("recv Lagged message.")
@@ -65,6 +67,7 @@ impl UdpHandle {
             sessions,
             fake_dns,
             clear_fut: Some(clear_fut),
+            dns_clear_rx: Some(dns_clear_rx),
         }
     }
 
@@ -82,7 +85,7 @@ impl UdpHandle {
 
         let sessions = &self.sessions;
         let udp_tx = Arc::new(udp_tx);
-        let mut dns_proxy = DnsProxy::new(udp_tx.clone());
+        let mut dns_proxy = DnsProxy::new(udp_tx.clone(), self.dns_clear_rx.take().unwrap());
         // recv from local tunnel packet then send them to remote.
         let forward_to_outgoing =
             |mut rx: Receiver<UdpPkg>, d_addr: SocketAddr, proxy_udp_cl: Arc<TokioUdpSocket>| async move {
@@ -172,7 +175,7 @@ impl UdpHandle {
                     );
                     let (tx, rx) = channel::<UdpPkg>(*UDP_RECV_CH_SIZE);
                     tx.send(UdpPkg { payload: data }).await.unwrap();
-                    let proxy_udp = create_outbound_udp_socket(&d_addr).unwrap();
+                    let proxy_udp = create_outbound_udp_socket(&d_addr, None).unwrap();
                     let proxy_udp = Arc::new(proxy_udp);
                     let proxy_udp_cl = proxy_udp.clone();
 

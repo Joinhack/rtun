@@ -27,6 +27,7 @@ lazy_static! {
     pub static ref TCP_KEEPALIVE_TIMEOUT: u64 = get_env_var_or("TCP_KEEPALIVE_TIMEOUT", 600);
     pub static ref TCP_KEEPALIVE_INTERVAL: u64 = get_env_var_or("TCP_KEEPALIVE_INTERVAL", 60);
     pub static ref TCP_KEEPALIVE_RETRIES: u32 = get_env_var_or("TCP_KEEPALIVE_RETRIES", 5);
+    pub static ref DNS_PROXY_LISTEN_PORT: u16 = get_env_var_or("DNS_PROXY_LISTEN_PORT", 10880);
     pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
     pub static ref NETSTACK_OUTPUT_CHANNEL_SIZE: usize =
         get_env_var_or("NETSTACK_OUTPUT_CHANNEL_SIZE", 512);
