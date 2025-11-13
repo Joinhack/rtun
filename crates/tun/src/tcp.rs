@@ -8,10 +8,7 @@ use std::time::Duration;
 use crate::cancelable::{CancelHandle, Cancelable, CancelableResult};
 use crate::fakedns::FakeDNS;
 use crate::net::{CopyTrait, copy_bidirectional_with_timeout, create_outbound_tcp_socket};
-use crate::option::{
-    DOWNLINK_COPY_TIMEOUT, LINK_BUFFER_SIZE, OUTBOUND_CONNECT_TIMEOUT, SOCKS5_ADDR,
-    UPLINK_COPY_TIMEOUT,
-};
+use crate::option::{LINK_BUFFER_SIZE, LINK_COPY_TIMEOUT, OUTBOUND_CONNECT_TIMEOUT, SOCKS5_ADDR};
 use crate::socks5::{self, Socks5Addr};
 use futures::FutureExt;
 use log::{debug, error, info};
@@ -139,8 +136,7 @@ impl TcpHandle {
                 &mut proxy_conn,
                 &mut tcp_stream,
                 *LINK_BUFFER_SIZE * 1024,
-                Duration::from_secs(*DOWNLINK_COPY_TIMEOUT),
-                Duration::from_secs(*UPLINK_COPY_TIMEOUT),
+                Duration::from_secs(*LINK_COPY_TIMEOUT),
             );
             let (copy_fut, handle) = Cancelable::new(copy_fut);
             //connects_guard must drop  if insert success.

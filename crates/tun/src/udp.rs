@@ -1,5 +1,5 @@
 use futures::{FutureExt, StreamExt};
-use log::{debug, error};
+use log::{debug, error, info};
 use netstack_lwip::UdpSocket;
 use netstack_lwip::udp::SendHalf;
 use std::collections::hash_map::Entry;
@@ -90,7 +90,7 @@ impl UdpHandle {
                     let pkg = match rx.recv().await {
                         Some(pkg) => pkg,
                         None => {
-                            debug!("udp recv channel closed");
+                            info!("udp recv channel closed. (d_addr: {d_addr})");
                             return;
                         }
                     };
@@ -127,7 +127,7 @@ impl UdpHandle {
                         }
                         Err(_) => {
                             let mut sesses = sessions.lock().await;
-                            debug!("s_addr: {} removed, sessions: {}", s_addr, sesses.len());
+                            info!("s_addr: {} removed, sessions: {}", s_addr, sesses.len());
                             sesses.remove(&s_addr);
                             return;
                         }
@@ -166,7 +166,7 @@ impl UdpHandle {
                     }
                 }
                 Entry::Vacant(vacant) => {
-                    debug!(
+                    info!(
                         "add seession s_addr: {s_addr} d_addr: {d_addr}, session: {}",
                         s_len
                     );
