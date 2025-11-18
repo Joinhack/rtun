@@ -69,7 +69,6 @@ mod aead {
         N: NonceAdance,
     {
         /// Decrypts the given buffer in place.
-        ///
         #[inline]
         fn decrypt<InOut>(&mut self, buf: &mut InOut) -> Result<()>
         where
@@ -143,6 +142,6 @@ mod tests {
             0x9a, 0x59, 0x63, 0x81, 0xd4, 0x0, 0xfa, 0x13, 0x25, 0xc5, 0xc9, 0xfd, 0xe4, 0xb4,
             0xc8, 0x39, 0x71, 0xe2, 0x77, 0x2c, 0xde, 0xdb, 0xf4, 0xf5, 0xb2, 0xf4, 0xb9, 0x47,
         ];
-        let ciper = aead::AeadCipher::new("aes-128-gcm").unwrap();
+        let cipher = aead::AeadCipher::new("aes-128-gcm").unwrap();
     }
 }
