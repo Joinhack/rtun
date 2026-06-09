@@ -5,6 +5,24 @@ use std::{
     str::FromStr,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DnsUpstreamProto {
+    Udp,
+    Tcp,
+}
+
+impl FromStr for DnsUpstreamProto {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "tcp" => Ok(Self::Tcp),
+            "udp" => Ok(Self::Udp),
+            _ => Err(()),
+        }
+    }
+}
+
 pub const OUTBOUND_INTERFACES_NAME: &str = "OUTBOUND_INTERFACES";
 
 #[cfg(target_os = "linux")]
@@ -14,9 +32,9 @@ static IF_NAME: &str = "tun200";
 static IF_NAME: &str = "utun200";
 
 lazy_static! {
+    pub static ref UDP_RECV_CH_SIZE: usize = get_env_var_or("UDP_RECV_CH_SIZE", 256);
     pub static ref NETSTACK_BUFF_SIZE: usize = get_env_var_or("NETSTACK_BUFF_SIZE", 512);
     pub static ref NETSTACK_UDP_BUFF_SIZE: usize = get_env_var_or("NETSTACK_UDP_BUFF_SIZE", 256);
-    pub static ref UDP_RECV_CH_SIZE: usize = get_env_var_or("UDP_RECV_CH_SIZE", 256);
     pub static ref OUTBOUND_CONNECT_TIMEOUT: u64 = get_env_var_or("TCP_CONNECT_TIMEOUT", 5);
     pub static ref TUN_DEFAULT_NAME: String = get_env_var_or("TUN_DEFAULT_NAME", IF_NAME.into());
     pub static ref LINK_COPY_TIMEOUT: u64 = get_env_var_or("LINK_COPY_TIMEOUT", 15);
@@ -28,6 +46,8 @@ lazy_static! {
     pub static ref TCP_KEEPALIVE_INTERVAL: u64 = get_env_var_or("TCP_KEEPALIVE_INTERVAL", 60);
     pub static ref TCP_KEEPALIVE_RETRIES: u32 = get_env_var_or("TCP_KEEPALIVE_RETRIES", 5);
     pub static ref DNS_PROXY_LISTEN_PORT: u16 = get_env_var_or("DNS_PROXY_LISTEN_PORT", 10880);
+    pub static ref DNS_UPSTREAM_PROTO: DnsUpstreamProto =
+        get_env_var_or("DNS_UPSTREAM_PROTO", DnsUpstreamProto::Udp);
     pub static ref GFW_RULE_PATH: String = get_env_var_or("GFW_RULE_PATH", "gfw.txt".to_string());
     pub static ref NETSTACK_OUTPUT_CHANNEL_SIZE: usize =
         get_env_var_or("NETSTACK_OUTPUT_CHANNEL_SIZE", 512);
