@@ -137,7 +137,7 @@ impl PostTunSetup {
                         match get_if_addr(&tun_setup.default_iface) {
                             Ok(ip) => {
                                 // When the event is received, attempting to get the interface address immediately may fail.
-                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                tokio::time::sleep(Duration::from_millis(1500)).await;
                                 if let Ok(rt) = PostTunSetup::new(
                                     tun_setup.gw.clone(),
                                     tun_setup.iface.clone(),
