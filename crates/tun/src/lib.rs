@@ -173,6 +173,15 @@ impl Tun {
     }
 
     pub async fn run(self) -> Result<()> {
+        let new_limit = libc::rlimit {
+            rlim_cur: 65536,
+            rlim_max: 65536,
+        };
+        let ret = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &new_limit) };
+        if ret != 0 {
+            anyhow::bail!(std::io::Error::last_os_error());
+        }
+
         let destination = match self.device.destination() {
             Ok(a) => a,
             Err(err) => {
